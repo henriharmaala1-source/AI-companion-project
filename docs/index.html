@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="fi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI-lisäys analogiseen FPV-droneen</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav>
+  <span class="logo">// fpv.dev</span>
+  <ul>
+    <li><a href="#intro">Projekti</a></li>
+    <li><a href="#bom">BOM</a></li>
+    <li><a href="#pipeline">Pipeline</a></li>
+    <li><a href="#virta">Virransyöttö</a></li>
+    <li><a href="#osd">OSD</a></li>
+    <li><a href="#riskit">Riskit</a></li>
+  </ul>
+</nav>
+
+<main>
+  <article>
+
+    <div class="post-header">
+      <span class="tag">build log #001</span>
+      <h1>AI-lisäys analogiseen<br>FPV-droneen</h1>
+      <p class="date">11. kesäkuuta 2026</p>
+    </div>
+
+    <section id="intro">
+      <p class="lead">Hei, tervetuloa seuraamaan projektiani tekoälyn lisäämisestä analogiseen FPV droneen. Tarkoituksena on luoda helposti kytkettävä kaveritietokone, joka toimii betaflightia käyttävien analog dronejen kanssa, lisäten eri ominaisuuksia.</p>
+
+      <p>Projektin ydin on <strong>Raspberry Pi 5</strong> -kaveritietokone, joka käsittelee kamerakuvaa reaaliajassa C++:lla ja Pythonilla. Tulokset lähetetään lennonjohto-ohjaimelle (FC) MSP-protokollan kautta ja näytetään OSD:n avulla pilotin laseissa — analogisessa kuvassa, reaaliajassa.</p>
+
+      <div class="highlight-box">
+        <span class="mono">// Tavoite</span>
+        <p>Plug-and-play companion computer -moduuli, joka toimii minkä tahansa Betaflight-dronen kanssa ilman ohjelmistopuolen muutoksia droneen.</p>
+      </div>
+    </section>
+
+    <section id="bom">
+      <h2><span class="accent">#</span> Bill of Materials</h2>
+      <p class="section-desc">Budjetti ~510 € · 7" frame · 6S · ELRS 2.4GHz · Analog FPV</p>
+
+      <h3>Drone-runko</h3>
+      <table>
+        <thead>
+          <tr><th>#</th><th>Komponentti</th><th>Malli</th><th>Hinta</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td><strong>Frame</strong></td><td>GEPRC GEP-MK5 7"</td><td>~40 €</td></tr>
+          <tr><td>2</td><td><strong>Flight Controller</strong></td><td>Matek H743-SLIM v4</td><td>~40 €</td></tr>
+          <tr><td>3</td><td><strong>ESC 4-in-1</strong></td><td>SpeedyBee BLS 55A</td><td>~35 €</td></tr>
+          <tr><td>4</td><td><strong>Moottorit × 4</strong></td><td>BrotherHobby R5 2207 1750KV</td><td>~60 €</td></tr>
+          <tr><td>5</td><td><strong>Potkurit</strong></td><td>HQProp 7×4×3 V1S</td><td>~10 €</td></tr>
+          <tr><td>6</td><td><strong>VTX</strong></td><td>SpeedyBee TX500</td><td>~20 €</td></tr>
+          <tr><td>7</td><td><strong>FPV-kamera</strong></td><td>Caddx Ratel 2 Micro</td><td>~20 €</td></tr>
+          <tr><td>8</td><td><strong>Vastaanotin</strong></td><td>RadioMaster RP2 ELRS 2.4</td><td>~9 €</td></tr>
+          <tr><td>9</td><td><strong>GPS</strong></td><td>Matek M10-L-4.11</td><td>~25 €</td></tr>
+          <tr><td>10</td><td><strong>Akku × 2</strong></td><td>CNHL 6S 3000mAh 60C</td><td>~90 €</td></tr>
+          <tr><td>11</td><td><strong>VTX-antenni</strong></td><td>Foxeer Lollipop 4 RHCP</td><td>~8 €</td></tr>
+          <tr><td>12</td><td><strong>Kondensaattori</strong></td><td>50V 1000µF low-ESR</td><td>~3 €</td></tr>
+          <tr><td>13</td><td><strong>BEC</strong></td><td>Matek UBEC DUO</td><td>~15 €</td></tr>
+          <tr><td>14</td><td><strong>Sekalaista</strong></td><td>XT60 · johdot · standoffit</td><td>~10 €</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Kaveritietokone</h3>
+      <table>
+        <thead>
+          <tr><th>#</th><th>Komponentti</th><th>Malli</th><th>Hinta</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>15</td><td><strong>Companion computer</strong></td><td>Raspberry Pi 5 (4GB)</td><td>~80 €</td></tr>
+          <tr><td>16</td><td><strong>Dev-capture</strong></td><td>USB CVBS -dongle</td><td>~8 €</td></tr>
+          <tr><td>17</td><td><strong>USB-C power</strong></td><td>USB-C breakout + 5.1kΩ CC</td><td>~3 €</td></tr>
+        </tbody>
+      </table>
+
+      <div class="total-box">
+        <div class="total-row"><span>Drone-runko</span><span>~385 €</span></div>
+        <div class="total-row"><span>Kaveritietokone</span><span>~91 €</span></div>
+        <div class="total-row total"><span>Yhteensä</span><span>~476 €</span></div>
+        <p class="total-note">Ei sisällä: lähettintä, latureita, laseja</p>
+      </div>
+    </section>
+
+    <section id="pipeline">
+      <h2><span class="accent">#</span> Video-pipeline</h2>
+      <p>RPi 5 analysoi videokuvaa CVBS-donglelta ja lähettää OSD-datan FC:lle MSP:n kautta. FPV-kamera menee suoraan VTX:lle — analoginen kuva ei käy digitaalisena missaan vaiheessa.</p>
+
+      <div class="pipeline-diagram">
+        <div class="pipeline-box rpi">Raspberry Pi 5<br><small>C++ / Python / OpenCV</small></div>
+        <div class="pipeline-arrow">UART / MSP ↓</div>
+        <div class="pipeline-box fc">FC (H743-SLIM v4)<br><small>AT7456E OSD</small></div>
+        <div class="pipeline-arrow">↓</div>
+        <div class="pipeline-box vtx">VTX TX500 → Lasit</div>
+      </div>
+
+      <ul class="notes">
+        <li>RPi 5 saa videokopion analogikamerasta CVBS-donglen kautta CV-analyysiä varten</li>
+        <li>FC kirjoittaa OSD-merkit AT7456E-piirille — FPV-signaali pysyy analogisena</li>
+        <li>Latenssi FPV-kuvaan: 0 ms — analoginen kamera menee suoraan VTX:lle</li>
+        <li>OSD päivittyy FC:n kautta, 30×16 merkkiruudukkoon</li>
+      </ul>
+    </section>
+
+    <section id="virta">
+      <h2><span class="accent">#</span> Virransyöttö</h2>
+
+      <pre class="code-block">6S Akku (max 25.2V)
+    │
+    ├──→ ESC (suoraan) → Moottorit
+    │
+    ├──→ [50V 1000µF kondensaattori]
+    │
+    └──→ [Matek UBEC DUO]
+              ├──→ 5V / 4A → USB-C breakout → RPi 5
+              └──→ adj. / 4A → FC (H743-SLIM v4) → VTX TX500</pre>
+
+      <div class="warning-box">
+        <span class="mono">// Huomio</span>
+        <p>Matek UBEC DUO max sisääntulo on <strong>26V</strong>. 6S täyteen ladattuna = 25.2V — todella tiukka marginaali. Tarkkaile lämpötilaa ja harkitse 5S-akkua alkuvaiheessa.</p>
+      </div>
+    </section>
+
+    <section id="osd">
+      <h2><span class="accent">#</span> Ongelma: OSD-piirto Betaflightissa</h2>
+
+      <p class="lead">OSD-piirto analogiseen FPV-kuvaan — kaksi lähestymistapaa</p>
+
+      <p>Kun aloin miettiä miten saan Raspberry Pin piirtämään OSD:lle, törmäsin heti ongelmaan jota ei ensisilmäyksellä näe: analoginen FPV-järjestelmä ei yksinkertaisesti odota kenenkaan tulevan väliin kesken videoketjun.</p>
+
+      <p>Ensimmäinen ajatus oli lisätä sarjaan erillinen <strong>MAX7456</strong>-piiri. Se on sama OSD-piiri jota Betaflight jo käyttää FC:n sisällä, mutta ulkoisena moduulina, joka istuisi kameran ja lähettimen välissä. Raspberry Pi ohjaisi sitä SPI-väylän yli, piiri lisäisi merkit analogiseen signaaliin reaaliajassa, ja lentäjä näkisi tuloksen laseissaan. Videoketju pysyisi analogisena alusta loppuun eikä latenssia syntyisi.</p>
+
+      <p>Se toimii, mutta se on lisälaite. Johdot, liittimet, tila rungossa, rahaa.</p>
+
+      <div class="highlight-box">
+        <span class="mono">// Oivallus</span>
+        <p>Sitten huomasin ilmeisen asian: FC:ssä on jo <strong>AT7456E</strong>. Se on saman perheen piiri kuin MAX7456, ja Betaflight ohjaa sitä joka lennolla. Kysymys muuttuikin: voiko Betaflight-lähdekoodiin lisätä komennon jolla ulkoinen laite käskee FC:tä kirjoittamaan haluamansa merkin haluamaansa kohtaan ruudukkoa?</p>
+      </div>
+
+      <p>Vastaus on kyllä, ja muutos on yllättävän pieni. Betaflight on avointa lähdekoodia ja MSP-protokolla — se sama protokolla jolla Configurator kommunikoi FC:n kanssa — on laajennettavissa. Käytännössä kyse on muutamasta sadasta rivistä C:tä: lisätään uusi MSP-käsittelijä joka ottaa vastaan koordinaatit ja merkkikoodin, ja kirjoittaa ne suoraan AT7456E:n näyttömuistiin.</p>
+
+      <pre class="code-block">// Raspberry Pi lähettää UART:lla:
+MSP_SET_OSD_CHAR  col=3  row=5  char=0xC2
+
+// FC kirjoittaa AT7456E:n VRAM:iin:
+AT7456E[row * 30 + col] = char_code
+
+// Analogiseen kuvaan ilmestyy merkki —
+// videosignaali ei ole käynyt digitaalisena missaan</pre>
+
+      <p>Rajoite on se mitä AT7456E ylipäätään osaa: se operoi <strong>30×16 merkkiruudukolla</strong>, ei vapailla pikseleillä. Bounding boxia ei voi piirtää pikselikoordinaateilla. Mutta piirille voi ladata kerran oman merkistön — kulmamerkit, viivanpätkat, nuolet — ja niitä sijoittelemalla syntyy visuaalisesti riittävä kohteen osoitus. Tarkka pikseliruudukko olisi joka tapauksessa valetarkkuutta, koska CV-tulos on aina jonkin verran vanha siihen mennessä kun se piirtyy.</p>
+
+      <div class="highlight-box">
+        <span class="mono">// Lopputulos</span>
+        <p>Yksi UART-kaapeli Raspberry Pilta FC:lle, splitteri josta RPi saa oman kopion videosta analyysiä varten, ja forkattu Betaflight joka ymmärtää uuden komennon. Ei erillistä OSD-moduulia, ei ylimääräistä rautaa ketjussa.</p>
+      </div>
+
+      <p>Ja koska muutos on tehty avoimeen lähdekoodiin, sen voi julkaista sellaisenaan. Jos protokollan dokumentoi kunnolla, kuka tahansa voi kytkeä oman laitteensa mihin tahansa Betaflight-droneen samalla tavalla.</p>
+
+      <ul class="notes">
+        <li>MAX7456 (ulkoinen) → toimii, mutta vaatii lisärautaa ja johdotuksen</li>
+        <li>AT7456E (FC:n sisäinen) + MSP-laajennus → ei lisälaitteita, yksi UART-kaapeli</li>
+        <li>30×16 merkkiruudukko — ei pikselikoordinaatteja, mutta riittää kohteen osoitukseen</li>
+        <li>Forkattu Betaflight + dokumentoitu protokolla → julkaisukelpoiseksi sellaisenaan</li>
+      </ul>
+    </section>
+
+    <section id="riskit">
+      <h2><span class="accent">#</span> Riskienhallinta</h2>
+      <p class="section-desc">T = todennäköisyys · V = vaikutus · M = matala · K = korkea</p>
+
+      <table class="risk-table">
+        <thead>
+          <tr><th>#</th><th>Riski</th><th>T</th><th>V</th><th>Taso</th><th>Fallback / Vastatoimenpide</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td><strong>Laskentateho ei riitä</strong><br><small>RPi 5 ei pysy reaaliaikaisessa CV-käsittelyssä — OpenCV + objektintunnistus voi viedä 200–400 ms per frame ilman optimointia</small></td>
+            <td>K</td><td>K</td>
+            <td><span class="risk-badge risk-high">KORKEA</span></td>
+            <td>Vaihto MCU-pohjaiseen inferenssiin (Hailo AI Hat RPi 5:lle, 13 TOPS) tai kevyempään malliin (MobileNetV2)</td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td><strong>FPV-viive liian suuri aktiiviseen lentämiseen</strong><br><small>Digitaalinen pipeline kerää viivettä joka askeleella: libcamera-bufferi ~30 ms + OpenCV-käsittely ~30–50 ms + HDMI→composite-muunnos ~20–30 ms = yhteensä 80–130 ms. Analoginen FPV-pilotti odottaa &lt;30 ms — ero tuntuu selvästi laseissa ja tekee reaktiivisesta lentämisestä epämiellyttavää tai vaarallista</small></td>
+            <td>K</td><td>K</td>
+            <td><span class="risk-badge risk-high">KORKEA</span></td>
+            <td>Analoginen kamera suoraan VTX:lle (0 ms lisäviivettä); RPi laskee vain OSD-datan ja lähettää sen MSP:llä FC:lle — ei kosketa videopiiriin lainkaan</td>
+          </tr>
+          <tr>
+            <td>3</td>
+            <td><strong>UBEC jännitemarginaali kriittisen pieni</strong><br><small>Matek UBEC DUO:n maksimisisääntulo on 26 V. 6S LiPo täyteen ladattuna = 4,2 V × 6 = 25,2 V, marginaali vain 0,8 V (&lt;3 %). Balancerin epätarkkuus, pienkin ylilataus tai jännitepiikki moottorin jarrutuksesta voi ylittää rajan — UBEC hajoaa ja RPi sammuu kesken lennon</small></td>
+            <td>M</td><td>K</td>
+            <td><span class="risk-badge risk-medium">KESKI</span></td>
+            <td>Aloita 5S-akulla (21,0 V täysi, 5 V marginaali); tai vaihda UBEC malliin jonka max ≥ 30 V, esim. Matek FCHUB-6S</td>
+          </tr>
+          <tr>
+            <td>4</td>
+            <td><strong>RPi 5 ylikuumenee lennon aikana</strong><br><small>RPi 5 kuluttaa kuormitettuna 6–8 W, ESC tuottaa omansa — suljetussa rakenteessa lämpötila nousee nopeasti. Thermal throttle hidastaa suoritinta, pähkimässä sammuminen</small></td>
+            <td>K</td><td>K</td>
+            <td><span class="risk-badge risk-high">KORKEA</span></td>
+            <td>Aktiivinen tuuletus (5 V miniviuhka), alumiiniheatsink, ilmakanavat frameen; asenna ‘vcgencmd measure_temp’ -seuranta logiin</td>
+          </tr>
+          <tr>
+            <td>5</td>
+            <td><strong>Tärinä rikkoo SD-kortin tai kiinnitykset</strong><br><small>FPV-drone tärisee moninkertaisesti verrattuna mihin tahansa kuluttajaelektroniikkaan. SD-kortti on mekaanisesti löysässä liittimessä — se voi irrota tai korruptoitua</small></td>
+            <td>K</td><td>M</td>
+            <td><span class="risk-badge risk-medium">KESKI</span></td>
+            <td>Anti-vibration mount RPi:lle (silikonigrommets); siirry NVMe SSD:hen RPi 5 PCIe -liitännän kautta tai eMMC-moduuliin</td>
+          </tr>
+          <tr>
+            <td>6</td>
+            <td><strong>EMI häiritsee GPS:ää tai UART-liikennettä</strong><br><small>BLHeli ESC + 4 moottoria tuottavat voimakasta PWM-kohinaa. Klassinen ongelma iNav/ArduPilot-projekteissa: GPS menettää fixit tai UART-paketteja katoaa</small></td>
+            <td>K</td><td>M</td>
+            <td><span class="risk-badge risk-medium">KESKI</span></td>
+            <td>Suojatut kierretyt kaapelit, GPS mahdollisimman kauas ESC:stä (perämast), ferriittirenkaat UART-linjaan</td>
+          </tr>
+          <tr>
+            <td>7</td>
+            <td><strong>MSP-protokollan yhteensopivuusongelmat</strong><br><small>Betaflight muuttaa MSP-komentoja versioiden välillä. OSD-kirjoitus (MSP_DISPLAYPORT) ei ole aina dokumentoitu — väärä versio voi jättää OSD:n tyhjaks</small></td>
+            <td>M</td><td>K</td>
+            <td><span class="risk-badge risk-medium">KESKI</span></td>
+            <td>Testaa MSP-käskyt etukäteen CLI:ssä ennen lennoa; fallback: MAVLink + ArduPilot jos BF ei riitä</td>
+          </tr>
+          <tr>
+            <td>8</td>
+            <td><strong>Analogivideota ei saada muutettua RPi 5:lle</strong><br><small>USB CVBS -dongle (kehitysvaiheessa) vaatii toimivan V4L2-ajurin RPi OS:ssä. Halvoilla dongeleilla ajurituki on puutteellinen tai kaatuu — analoginen kuva ei näy OpenCV:lle lainkaan, eikä pipelinen integraatiota voi testata ilman oikeaa kuvasyötettä</small></td>
+            <td>K</td><td>K</td>
+            <td><span class="risk-badge risk-high">KORKEA</span></td>
+            <td>Testaa dongle ensin pöydällä (‘v4l2-ctl --list-devices’); varalla: EasyCap UTV007 -siru, jolla vakaa Linux-tuki. Viime kädessä: kehitysvaihe ilman analogicapturea, testaa suoraan RPi Camera Module 3:lla</td>
+          </tr>
+          <tr>
+            <td>9</td>
+            <td><strong>Analogivideon tarkkuus ei riitä CV:lle</strong><br><small>PAL-analogivideo = 576i, efektiivinen resoluutio n. 576×288 pikseliä ja kenttäinterlace pahentaa liikkeen sumentumaa. Pieni tai kaukainen kohde voi olla liian epätarkka luotettavaan bounding box -tunnistukseen — etenkin nopeassa lennossa</small></td>
+            <td>M</td><td>K</td>
+            <td><span class="risk-badge risk-medium">KESKI</span></td>
+            <td>Käytä digitaalista RPi Camera Module 3:a CV-syötteenä (1080p, tarkka) ja analogista kameraa vain pilotin FPV-näkymään — tämä on jo projektin pääarkkitehtuuri</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="risk-legend">
+        <span class="risk-badge risk-high">KORKEA</span> todennäköinen ja vakava — vaatii fallback-suunnitelman
+        <span class="risk-badge risk-medium">KESKI</span> mahdollinen tai hallittava vaikutus — seuraa aktiivisesti
+        <span class="risk-badge risk-low">MATALA</span> epätodennäköinen tai pieni vaikutus
+      </div>
+    </section>
+
+  </article>
+</main>
+
+<footer>
+  <p class="mono">// Henri Harmaala · 2026 · <a href="https://github.com/henriharmaala1-source">GitHub</a></p>
+</footer>
+
+</body>
+</html>
