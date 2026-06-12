@@ -205,7 +205,7 @@ AT7456E[row * 30 + col] = char_code
             <td><strong>RPi 5 ylikuumenee lennon aikana</strong><br><small>RPi 5 kuluttaa kuormitettuna 6–8 W, ESC tuottaa omansa — suljetussa rakenteessa lämpötila nousee nopeasti. Thermal throttle hidastaa suoritinta, pähkimässä sammuminen</small></td>
             <td>K</td><td>K</td>
             <td><span class="risk-badge risk-high">KORKEA</span></td>
-            <td>Aktiivinen tuuletus (5 V miniviuhka), alumiiniheatsink, ilmakanavat frameen; asenna ‘vcgencmd measure_temp’ -seuranta logiin</td>
+            <td>Aktiivinen tuuletus (5 V miniviuhka), alumiiniheatsink, ilmakanavat frameen; asenna 'vcgencmd measure_temp' -seuranta logiin</td>
           </tr>
           <tr>
             <td>5</td>
@@ -230,17 +230,17 @@ AT7456E[row * 30 + col] = char_code
           </tr>
           <tr>
             <td>8</td>
-            <td><strong>Analogivideota ei saada muutettua RPi 5:lle</strong><br><small>USB CVBS -dongle (kehitysvaiheessa) vaatii toimivan V4L2-ajurin RPi OS:ssä. Halvoilla dongeleilla ajurituki on puutteellinen tai kaatuu — analoginen kuva ei näy OpenCV:lle lainkaan, eikä pipelinen integraatiota voi testata ilman oikeaa kuvasyötettä</small></td>
+            <td><strong>Analogivideota ei saada muutettua RPi 5:lle</strong><br><small>USB CVBS -dongle vaatii toimivan V4L2-ajurin RPi OS:ssä. Halvoilla dongeleilla ajurituki on puutteellinen tai kaatuu — analoginen kuva ei näy OpenCV:lle lainkaan</small></td>
             <td>K</td><td>K</td>
             <td><span class="risk-badge risk-high">KORKEA</span></td>
-            <td>Testaa dongle ensin pöydällä (‘v4l2-ctl --list-devices’); varalla: EasyCap UTV007 -siru, jolla vakaa Linux-tuki. Viime kädessä: kehitysvaihe ilman analogicapturea, testaa suoraan RPi Camera Module 3:lla</td>
+            <td>Testaa dongle ensin pöydällä ('v4l2-ctl --list-devices'); varalla: EasyCap UTV007 -siru, jolla vakaa Linux-tuki</td>
           </tr>
           <tr>
             <td>9</td>
-            <td><strong>Analogivideon tarkkuus ei riitä CV:lle</strong><br><small>PAL-analogivideo = 576i, efektiivinen resoluutio n. 576×288 pikseliä ja kenttäinterlace pahentaa liikkeen sumentumaa. Pieni tai kaukainen kohde voi olla liian epätarkka luotettavaan bounding box -tunnistukseen — etenkin nopeassa lennossa</small></td>
+            <td><strong>Analogivideon tarkkuus ei riitä CV:lle</strong><br><small>PAL-analogivideo = 576i, efektiivinen resoluutio n. 576×288 pikseliä ja kenttäinterlace pahentaa liikkeen sumentumaa. Pieni tai kaukainen kohde voi olla liian epätarkka luotettavaan bounding box -tunnistukseen</small></td>
             <td>M</td><td>K</td>
             <td><span class="risk-badge risk-medium">KESKI</span></td>
-            <td>Käytä digitaalista RPi Camera Module 3:a CV-syötteenä (1080p, tarkka) ja analogista kameraa vain pilotin FPV-näkymään — tämä on jo projektin pääarkkitehtuuri</td>
+            <td>Käytä digitaalista kameraa CV-syötteenä ja analogista kameraa vain pilotin FPV-näkymään</td>
           </tr>
         </tbody>
       </table>
