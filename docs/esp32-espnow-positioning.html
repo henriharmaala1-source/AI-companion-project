@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="fi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ESP32 ESP-NOW / CSL suhteellinen paikannus droneille</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav>
+  <span class="logo">// fpv.dev</span>
+  <ul>
+    <li><a href="index.html">Etusivu</a></li>
+    <li><a href="#espnow">ESP-NOW</a></li>
+    <li><a href="#ftm">Wi-Fi FTM</a></li>
+    <li><a href="#csl">CSL / 802.15.4</a></li>
+    <li><a href="#uwb">UWB</a></li>
+    <li><a href="#rtk">RTK</a></li>
+    <li><a href="#johtopaatos">Johtopäätös</a></li>
+  </ul>
+</nav>
+
+<main>
+  <article>
+
+    <div class="post-header">
+      <span class="tag">build log #002</span>
+      <h1>ESP32 ESP-NOW / CSL<br>suhteellinen paikannus droneille</h1>
+      <p class="date">1. heinäkuuta 2026</p>
+    </div>
+
+    <section id="intro">
+      <p class="lead">Kun droneja on useampi, seuraava kysymys on väistämätön: miten ne tietävät toistensa suhteellisen sijainnin — muodostelmalento, väistely, "seuraa johtajaa" — ilman että jokainen luottaa pelkkään absoluuttiseen GPS-fixiin? Kysymys oli: voisiko ESP32:n ESP-NOW ja IEEE 802.15.4 CSL toimia tähän, RTK:n tapaan, ja olisiko järkevää laittaa kaksi ESP32:sta jokaiseen droneen.</p>
+
+      <div class="warning-box">
+        <span class="mono">// TL;DR</span>
+        <p>ESP-NOW ei sovellu tarkkaan etäisyysmittaukseen. CSL ei ole paikannusteknologia lainkaan — se on sekoitettu UWB:hen. Kahdesta erillisestä ESP32:sta ei saa suuntatietoa ilman yhteistä kellolähdettä. Senttitason "RTK-tyyppinen" suhteellinen paikannus vaatii joko UWB-moduulin tai liikkuvan referenssin GNSS-RTK:n — ESP32 sopii näissä radiolinkiksi, ei mittalaitteeksi.</p>
+      </div>
+    </section>
+
+    <section id="espnow">
+      <h2><span class="accent">#</span> ESP-NOW round-trip-time -mittaus</h2>
+      <p>ESP-NOW on yhteydetön kerros-2-protokolla 802.11-radion päällä: ei tukiasemaa, ei assosiaatiota, hyötykuorma perinteisesti 250 tavua (ESP-IDF 5:ssä pirstoen jopa ~1490 tavua). Avoimessa maastossa kantama on tyypillisesti 220–400 m sarjatuotannon antennilla, LR-tilassa (256/512 kbps) yli 900 m. Viive pysyy alle 20–30 ms:ssä 150–300 m etäisyydellä.</p>
+
+      <p>Ajatus on houkutteleva: aikaleimaa lähetys- ja vastaanottohetket, laske round-trip time (RTT), ja etäisyys = RTT × c / 2 — sama periaate kuin UWB:ssä. Käytännön mittaukset kertovat kuitenkin karun totuuden: tyypillinen ESP-NOW RTT on luokkaa 6 ms, josta pelkkä 250 tavun kehyksen ilma-aika vie ~2 ms per suunta.</p>
+
+      <div class="code-block">RTT ≈ 6 ms → matka valolla 6 ms:ssa ≈ 1800 km
+c = 3×10^8 m/s
+1 µs mittausjitteriä → ~300 m virhettä etäisyydessä
+ESP-NOW:n ohjelmistoaikaleimat: jitteriä kymmeniä–satoja µs</div>
+
+      <p>Ero UWB-piirien laitteistotasoisiin, nanosekunnin resoluution aikaleimoihin on suuruusluokkia. ESP-NOW:n aikaleimat otetaan sovelluskerroksella lähetys/vastaanotto-callbackeissa, joiden ajoitus riippuu käyttöjärjestelmän ajastuksesta, WiFi-ajurin sisäisistä jonoista ja keskeytysviiveistä — ei kiinteästä laitteistolaskurista. Kalibroinnilla ja keskiarvoistuksella parhaimmillaankin päästään metritason tarkkuuteen, ei senttiin.</p>
+
+      <ul class="notes">
+        <li>ESP-NOW toimii erinomaisesti telemetria- ja komentolinkkinä (matala viive, ei assosiaatiota, pitkä kantama)</li>
+        <li>RTT-pohjainen etäisyysmittaus ESP-NOW:lla ei riitä RTK-tyyppiseen tarkkuuteen</li>
+        <li>RSSI-pohjainen trilateraatio olisi vielä huonompi vaihtoehto: ±30–50 % virhe per linkki, ja dronen roottorien liikkeet + asennon muutokset pahentavat monitie-etenemistä entisestään</li>
+      </ul>
+    </section>
+
+    <section id="ftm">
+      <h2><span class="accent">#</span> Wi-Fi FTM (802.11mc) — oikea standardi</h2>
+      <p>Espressif tarjoaa ESP-IDF:ssä valmiin toteutuksen Wi-Fi Fine Timing Measurementista (802.11mc): laitteistotasoiset aikaleimat kehysten lähetys- ja saapumishetkille MAC-kerroksella, initiator/responder-roolit assosioidun Wi-Fi-yhteyden yli. Tämä on aidosti etäisyysmittaukseen suunniteltu ominaisuus, ei ESP-NOW:n väärinkäyttöä.</p>
+
+      <p>Julkaistut tulokset: ~1 m tarkkuus avoimessa tilassa vakio-offsetin kalibroinnin jälkeen, realistisemmin 5 m luokkaa sisätiloissa tai monitie-etenemisen kanssa. Se on kertaluokkaa parempi kuin ESP-NOW-RTT-hakkerointi, mutta silti kaukana senttitasosta.</p>
+
+      <div class="highlight-box">
+        <span class="mono">// Huomio</span>
+        <p>FTM vaatii Wi-Fi-assosiaation initiaattorin ja responderin välillä — se ei ole sama asia kuin ESP-NOW:n yhteydetön broadcast-malli. Kahden dronen välillä tämä tarkoittaisi erillistä Wi-Fi-linkkiä jokaista mittausparia kohden ESP-NOW-mesh-linkin rinnalla.</p>
+      </div>
+
+      <ul class="notes">
+        <li>Käyttökelpoinen: karkea törmäyksenesto, "onko toinen drone 5 vai 50 metrin päässä" -tason päättely</li>
+        <li>Ei käyttökelpoinen: senttitason muodostelmalento tai RTK-tyyppinen suhteellinen paikannus</li>
+      </ul>
+    </section>
+
+    <section id="csl">
+      <h2><span class="accent">#</span> CSL ei ole paikannusteknologia</h2>
+      <p>Tässä kohtaa lähtöoletus kaipaa korjausta. <strong>CSL (Coordinated Sampled Listening)</strong> on IEEE 802.15.4e/2015 -standardin MAC-kerroksen virransäästömekanismi: se ajoittaa nukkuvien solmujen herätyskuuntelun niin, että Thread- (OpenThread) tai Zigbee-verkon laitteet voivat säästää virtaa tietämättä toistensa tarkkaa herätysvaihetta etukäteen. Se ei mittaa etäisyyttä eikä aikaa lentoon millään tavalla — se on ajoitusoptimointi, ei tutka.</p>
+
+      <p>Todellinen etäisyysmittaus 802.15.4-perheessä tulee <strong>802.15.4z</strong>-lisäyksestä (2020): HRP-UWB-fyysinen kerros ja STS (Scrambled Timestamp Sequence) -suojattu aikaleimaus, jota mm. Apple U1 ja NXP/Qorvo-piirit käyttävät. Tämä on kokonaan eri radiofysiikka kuin Zigbee/Thread-verkkojen kapeakaistainen 2,4 GHz O-QPSK-PHY.</p>
+
+      <div class="warning-box">
+        <span class="mono">// Tarkistettu</span>
+        <p>ESP32-H2 ja ESP32-C6 tukevat 802.15.4:ää — mutta vain Zigbee/Thread/Matter-käyttöön tarkoitettua 2,4 GHz -kapeakaista-PHY:tä. Kummallakaan ei ole UWB-radiota piirissä, eikä yhdelläkään Espressifin sirulla ole natiivia UWB-tukea. "CSL paikannukseen" sekoittaa siis virransäästömekanismin ja UWB-etäisyysmittauksen, jotka ovat eri asia täysin eri PHY:llä.</p>
+      </div>
+    </section>
+
+    <section id="uwb">
+      <h2><span class="accent">#</span> UWB — se mitä oikeasti tarvitaan</h2>
+      <p>Senttitason etäisyysmittaus edellyttää laitteistoa, jossa on nanosekunnin resoluution aikaleimalaskuri itse piirissä — ei ohjelmistoaikaleimoja. Tähän on olemassa valmis, laajasti käytetty ratkaisu: Qorvo/Decawave DW1000/DW3000 (esim. DWM3000-moduuli), joka liitetään ESP32:een SPI:n yli. ESP32 toimii isäntä-MCU:na, UWB-piiri hoitaa itse two-way ranging (TWR) -mittauksen.</p>
+
+      <p>Käytännön tarkkuus: ~10–15 cm reaalimaailman olosuhteissa, akateemisessa parvitutkimuksessa (DWM1001/DW3000-pohjaisia solmuja pareittain mittaamassa ToF:ia, tulokset fuusioidaan IMU:n kanssa Extended Kalman -suotimella) yhdistelmä on jo tuotettu ja validoitu useissa julkaistuissa dronilaumatutkimuksissa.</p>
+
+      <p>DW3000 osaa myös suuntamittauksen (AoA): ±5° tarkkuudella 120° näkökentässä. Tämä toimii, koska molemmat vastaanottoantennit on kytketty <strong>samaan piiriin ja samaan RF-etupäähän</strong> — vaihekoherenssi syntyy laitteistosta, ei kahdesta erillisestä mikro-ohjaimesta.</p>
+
+      <ul class="notes">
+        <li>Yksi UWB-moduuli (DW3000/DWM3000) per drone → cm-luokan etäisyys naapuridroneihin</li>
+        <li>AoA vaatii saman piirin kaksi antenniporttia — ei kahta erillistä ESP32:sta</li>
+        <li>Jo käytössä akateemisessa parvitutkimuksessa: pareittainen ToF + IMU/EKF-fuusio</li>
+      </ul>
+    </section>
+
+    <section id="rtk">
+      <h2><span class="accent">#</span> RTK-tyyppinen: liikkuvan referenssin GNSS</h2>
+      <p>Jos kysymys on aidosti "RTK-tyyppisestä" ratkaisusta, sellainen on olemassa ja se on GNSS-maailman oma: <strong>moving-base RTK</strong>. Kaksi GNSS-vastaanotinta (esim. u-blox ZED-F9P) vaihtavat kantoaaltovaihemittauksia (RTCM3), ja niiden välinen perusvektori ratkeaa senttitarkkuudella — riippumatta siitä liikkuvatko molemmat vastaanottimet. Julkaistut lentotestit kuudella vastaanottimella: alle 6 cm 3D RMS -virhe; yksinkertaisemmissa kahden vastaanottimen mittauksissa ±2 cm paikallaan ollessa.</p>
+
+      <div class="pipeline-diagram">
+        <div class="pipeline-box rpi">GNSS-vastaanotin (drone A)<br><small>ZED-F9P, kantoaaltodata</small></div>
+        <div class="pipeline-arrow">RTCM3 / ESP-NOW ↓</div>
+        <div class="pipeline-box fc">ESP32 ESP-NOW -radiolinkki<br><small>&lt;30 ms viive, ei assosiaatiota</small></div>
+        <div class="pipeline-arrow">↓</div>
+        <div class="pipeline-box vtx">GNSS-vastaanotin (drone B)<br><small>ratkaisee baseline-vektorin</small></div>
+      </div>
+
+      <p>Tässä arkkitehtuurissa ESP32/ESP-NOW on juuri oikeassa roolissaan: langattomana korjausdatan siltana kahden GNSS-vastaanottimen välillä, ei mittalaitteena. ESP-NOW:n matala viive (&lt;30 ms 100–300 m kantamalla) ja broadcast-luonne (moni drone voi kuunnella samaa korjausvirtaa ilman parillista assosiaatiota) sopivat tähän hyvin — kunhan RTCM-sanomat pilkotaan ESP-NOW:n kehyskokoon.</p>
+    </section>
+
+    <section id="kaksi-esp">
+      <h2><span class="accent">#</span> Kaksi ESP32:ta droonia kohti?</h2>
+      <p>Ajatus kahdesta ESP32:sta samassa droonissa herää yleensä suuntatiedon (AoA) toivosta: jos on kaksi antennia, saisiko niistä kulman? Ei ilman yhteistä kellolähdettä. ESPARGOS-tutkimusprojekti dokumentoi tarkasti mitä tämä vaatii oikeasti: kaikki solmut samasta 40 MHz referenssikellosta taajuussynkronointiin, <em>ja</em> lisäksi tunnetun pituinen kalibrointireitti (piirilevyn mikroliuska-linjat) PLL:n vaihe-epävarmuuden korjaamiseksi ohjelmallisesti. Pelkkä yhteinen kello ei riitä vaihekoherenssiin.</p>
+
+      <div class="warning-box">
+        <span class="mono">// Seuraus</span>
+        <p>Kaksi erillistä ESP32:sta samassa droonissa — puhumattakaan kahdesta eri droonista — eivät jaa kelloa eivätkä kalibrointireittiä. Jokainen mittaa itsenäisesti, omalla kellollaan, omalla ajoituksellaan. Lopputulos on kaksi toisistaan riippumatonta, edelleen metritason etäisyys/RSSI-näytettä — ei koherenttia suuntamittausta.</p>
+      </div>
+
+      <p>Kaksi itsenäistä solmua per drone on silti mahdollisesti järkevä <em>tehtävänjako</em>-argumentti, ei fysiikka-argumentti: yksi ESP32 hoitaa Wi-Fi/ESP-NOW-telemetrian ja mahdollisen RTK-korjausdatan reitityksen (altis Wi-Fi-ajurin keskeytysviiveille), toinen toimii puhtaana SPI-isäntänä UWB-ranging-piirille niin ettei ajoitusherkkä mittaus häiriinny samalla ytimellä pyörivästä Wi-Fi-liikenteestä. Se on perusteltu insinöörisyy erottaa kuormat, muttei tapa saada suuntatietoa kahdesta erillisestä mikro-ohjaimesta.</p>
+    </section>
+
+    <section id="johtopaatos">
+      <h2><span class="accent">#</span> Johtopäätös</h2>
+      <p class="section-desc">Viisi vaihtoehtoa, sama kysymys: riittääkö tarkkuus muodostelmalentoon?</p>
+
+      <table class="risk-table">
+        <thead>
+          <tr><th>#</th><th>Teknologia</th><th>Tarkkuus</th><th>Rooli</th><th>Viability</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td><strong>ESP-NOW RTT</strong><br><small>ohjelmistoaikaleimat, ei laitteistolaskuria</small></td>
+            <td>m–km luokkaa</td>
+            <td>Telemetria/mesh-linkki, ei mittaus</td>
+            <td><span class="risk-badge risk-high">EI TOIMI</span></td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td><strong>Wi-Fi FTM (802.11mc)</strong><br><small>ESP-IDF:n natiivi ominaisuus</small></td>
+            <td>~1–5 m</td>
+            <td>Karkea törmäyksenesto</td>
+            <td><span class="risk-badge risk-medium">RAJALLINEN</span></td>
+          </tr>
+          <tr>
+            <td>3</td>
+            <td><strong>802.15.4 CSL</strong><br><small>virransäästö-MAC, ei fyysinen mittaus</small></td>
+            <td>—</td>
+            <td>Ei sovellu paikannukseen lainkaan</td>
+            <td><span class="risk-badge risk-high">EI SOVELLU</span></td>
+          </tr>
+          <tr>
+            <td>4</td>
+            <td><strong>UWB (DW3000/DWM3000) ESP32-isännällä</strong><br><small>SPI-liitäntä, laitteistoaikaleimat</small></td>
+            <td>~10–15 cm</td>
+            <td>Suhteellinen ranging drone-drone, jo validoitu tutkimuksessa</td>
+            <td><span class="risk-badge risk-low">SUOSITELTU</span></td>
+          </tr>
+          <tr>
+            <td>5</td>
+            <td><strong>GNSS moving-base RTK</strong><br><small>ESP-NOW korjausdatan siltana</small></td>
+            <td>~2–6 cm</td>
+            <td>Absoluuttisen kehyksen suhteellinen paikannus parvelle</td>
+            <td><span class="risk-badge risk-low">SUOSITELTU</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="highlight-box">
+        <span class="mono">// Suositus</span>
+        <p>ESP32/ESP-NOW pysyy tässä projektissa parhaiten radiolinkin roolissa — telemetria, MSP/OSD-data, mahdollinen RTCM-korjausdatan välitys parven sisällä. Itse suhteellinen paikannus kannattaa hakea joko UWB-moduulista (cm-luokan ranging, jo olemassa oleva komponentti) tai moving-base RTK-GNSS:stä (cm-luokan baseline), riippuen halutaanko ratkaisu joka toimii ilman satelliittinäkyvyyttä (UWB) vai joka skaalautuu isompiin etäisyyksiin ulkona (RTK).</p>
+      </div>
+    </section>
+
+  </article>
+</main>
+
+<footer>
+  <p class="mono">// Henri Harmaala · 2026 · <a href="https://github.com/henriharmaala1-source">GitHub</a></p>
+</footer>
+
+</body>
+</html>
