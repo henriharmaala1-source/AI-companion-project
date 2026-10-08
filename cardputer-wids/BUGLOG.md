@@ -8,6 +8,36 @@ Newest at the top.
 
 ---
 
+## esp-sdr is welded to one ESP-IDF commit
+
+**What the source says.** esp-sdr's S3 receiver calls PHY ROM functions, wraps
+private libphy symbols (`--wrap=chip_v7_set_chan_ana`, `set_rx_gain_cal_dc`) and
+pokes `phy_param` at fixed offsets. Its own comment: *"These private ABIs and
+offsets belong to the PHY archives pinned in firmware-targets.json."* The S3
+pin is ESP-IDF commit `25fe69f` — **6.2.0-dev**, GCC 16.1 — not a release.
+
+**Consequence.** The SDR image must use exactly that IDF. Building it against
+v5.5.5 (what the rest of this repo uses) may compile and still misbehave on RF.
+Never bump the IDF for the SDR image without re-running the M0 hardware checks
+in `docs/ELRS_SDR_PLAN.md`.
+
+---
+
+## A same-directory `#include "x.h"` cannot be overridden with `-I`
+
+**Symptom (found while planning).** Wanted to swap esp-sdr's `ring_io.h`
+(USB transport) for a RAM-buffer version by putting our directory first on the
+include path.
+
+**Why it fails.** For `#include "file"`, GCC searches the *including file's own
+directory* before any `-I` path. `ring_capture.c` and `ring_io.h` share a
+directory, so upstream's header always wins.
+
+**Fix.** Compile a build-time copy of `ring_capture.c` that sits next to our
+`ring_io.h`; the submodule itself stays untouched.
+
+---
+
 ## Host test failed to compile: `unknown type name 'SemaphoreHandle_t'`
 
 **Symptom.** The parser test `#include`s `wids_monitor.c` directly (to reach its
