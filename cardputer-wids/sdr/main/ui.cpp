@@ -130,13 +130,19 @@ static void draw_reason(const elrs_status_t *st, const ui_info_t *info)
     }
     centred(line, 82);
 
+    /* "When was it last DETECTED", from the verdict. Not the last on-grid
+     * burst: a single noise spike can land on the grid, and the simulator
+     * showed that line claiming ELRS seconds ago long after the link stopped. */
     display.setTextColor(COL_DIM, COL_BG);
-    if (st->last_seen_us > 0 && info->uptime_us >= st->last_seen_us) {
-        const double ago = (double)(info->uptime_us - st->last_seen_us) / 1e6;
+    if (st->state == ELRS_LIKELY) {
+        snprintf(line, sizeof(line), "dwell ~%.0f ms, flatness %.2f", (double)st->dwell_ms,
+                 (double)st->uniformity_cv);
+    } else if (st->last_likely_us > 0 && info->uptime_us >= st->last_likely_us) {
+        const double ago = (double)(info->uptime_us - st->last_likely_us) / 1e6;
         if (ago < 600.0) {
-            snprintf(line, sizeof(line), "last ELRS-grid burst %.0f s ago", ago);
+            snprintf(line, sizeof(line), "ELRS last detected %.0f s ago", ago);
         } else {
-            snprintf(line, sizeof(line), "last ELRS-grid burst %.0f min ago", ago / 60.0);
+            snprintf(line, sizeof(line), "ELRS last detected %.0f min ago", ago / 60.0);
         }
     } else {
         snprintf(line, sizeof(line), "listening %u MHz +-%u", info->center_mhz, info->span_mhz / 2);

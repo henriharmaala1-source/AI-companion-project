@@ -8,7 +8,9 @@
  * What it looks for (from the ExpressLRS source, see docs/ELRS_SDR_PLAN.md):
  *   - narrow bursts, 0.6-0.8 MHz wide;
  *   - centred on the ELRS grid 2400.4 + k MHz (k = 0..79), i.e. at x.4 MHz,
- *     where Bluetooth (even MHz) and Wi-Fi (20 MHz wide) do not sit;
+ *     where Bluetooth Classic, BLE and 802.15.4 (all on integer MHz) and
+ *     Wi-Fi (20 MHz wide) do not sit. Integer-MHz bursts are counted apart,
+ *     so a room full of Bluetooth does not hide an ELRS link;
  *   - spread evenly over the whole grid, because every 80-hop block visits
  *     each channel exactly once;
  *   - held for a few milliseconds per hop (2-40 ms depending on packet rate).
@@ -46,6 +48,7 @@ typedef struct {
     bool     invert;          /* flip sign of bin offsets (verify on hardware, M0) */
     uint8_t  threshold_db;    /* burst must exceed the floor by this much */
     uint16_t grid_tol_khz;    /* max distance from a grid line to count as on-grid */
+    uint16_t int_tol_khz;     /* max distance from an integer MHz to count as Bluetooth-like */
     uint16_t narrow_min_khz, narrow_max_khz;
     uint16_t wide_min_khz;    /* wider than this is Wi-Fi / microwave, ignored */
     float    window_s;        /* statistics time constant */
@@ -58,12 +61,15 @@ typedef struct {
     uint16_t channels_seen;    /* on-grid channels visited within the window */
     uint16_t channels_visible; /* grid channels inside the usable band */
     uint16_t distinct_narrow;  /* 1 MHz slots with narrow bursts, on- or off-grid */
-    float    on_grid_ratio;    /* on-grid / all narrow bursts */
+    float    on_grid_ratio;    /* on-grid / (on-grid + off-grid), integer-MHz bursts excluded */
+    float    int_grid_ratio;   /* integer-MHz (Bluetooth-like) share of all narrow bursts */
+    float    on_now_per_s;     /* on-grid bursts per second, 1 s time constant */
     float    uniformity_cv;    /* spread of visits over seen channels, lower = flatter */
     float    narrow_per_s, wide_per_s;
     float    dwell_ms;         /* typical hop dwell (bucket centre) */
     int16_t  floor_db, peak_db;/* code/db_step, i.e. dB relative to FFT full scale */
-    uint64_t last_seen_us;     /* last on-grid burst */
+    uint64_t last_seen_us;     /* last on-grid burst (noise can produce one) */
+    uint64_t last_likely_us;   /* last evaluation that ended in ELRS_LIKELY, 0 = never */
     uint32_t frames;
     uint8_t  activity[ELRS_CHANNELS]; /* 0..255 per channel, for the screen */
 } elrs_status_t;
@@ -79,8 +85,9 @@ typedef struct {
     /* decayed accumulators */
     float    visits[ELRS_CHANNELS];     /* on-grid hops per channel */
     float    spread[ELRS_CHANNELS];     /* any narrow burst, by nearest channel */
-    float    on_bursts, off_bursts, wide_runs;
+    float    on_bursts, int_bursts, off_bursts, wide_runs;
     float    recent_narrow;   /* same bursts, 1 s time constant: "is it happening now" */
+    float    recent_on;       /* on-grid bursts, 1 s time constant */
     float    dwell_hist[ELRS_DWELL_BUCKETS];
     /* per-channel visit tracking */
     uint32_t last_hit_frame[ELRS_CHANNELS];
@@ -91,6 +98,7 @@ typedef struct {
     uint32_t frame_no;
     uint64_t last_t_us;
     uint64_t last_seen_us;
+    uint64_t last_likely_us;
     uint8_t  last_peak_code;
     elrs_state_t state;
     elrs_state_t pending;

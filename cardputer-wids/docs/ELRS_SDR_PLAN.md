@@ -193,6 +193,15 @@ to this device.*
 | M4 | Field test: indoors/outdoors at 50 / 200 / 500 m, Wi-Fi busy and quiet | Range and false-positive table written into this doc |
 | M5 | Merge with the Wi-Fi monitor as one image, mode switch via reboot | Both modes run from the keyboard |
 
+**Before M0: the host simulator (`sdr/sim/`).** The real firmware runs on a PC
+against a modelled radio scene: `app_main.c`, `ui.cpp` through the real M5GFX
+drawing code, the detector, the decoder, the sink and the log. The esp-sdr
+engine is reduced to its frame-emission rules, each one cited to the upstream
+line. It checks the log, the verdict timeline and the screen in 11 scenarios.
+Its first run found the sink bug and two detector bugs in `BUGLOG.md`. It
+validates logic and timing. It cannot validate the antenna, the AGC or real
+signal levels: M0 still decides whether the idea works at all.
+
 ## 7. Risks
 
 | Risk | Why it matters | How it's caught |

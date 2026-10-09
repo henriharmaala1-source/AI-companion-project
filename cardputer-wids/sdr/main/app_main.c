@@ -6,12 +6,12 @@
  * The loop alternates two phases, because the RF engine masks interrupts
  * while it captures:
  *
- *   [ capture slice, ~100 ms, IRQs masked ] -> frames land in a RAM sink
+ *   [ capture slice, 100 ms, IRQs masked ] -> ~2 ms frames land in a RAM sink
  *   [ decode + detect + draw + keys + log, interrupts on ]
  *
- * Roughly 80-85 % of wall time is spent listening. ELRS holds each channel for
- * 2-40 ms and revisits every channel once per 80 hops, so the gaps cost
- * detection latency, not detection.
+ * The host simulator (sim/) measures 93 % of wall time spent listening.
+ * ELRS holds each channel for 2-40 ms and revisits every channel once per 80
+ * hops, so the gaps cost detection latency, not detection.
  *
  * Log lines are NDJSON in the same shape as the Wi-Fi monitor
  * ({"t":<us since boot>,"ev":...}) on the USB Serial/JTAG port.
@@ -41,11 +41,15 @@
 #define CENTER_MHZ        2442u
 #define RATE_CODE         SDR_RATE_80MSPS
 #define NFFT              256u
-#define UNITS_PER_FRAME   12u      /* ~1.8 ms per frame at 80 MS/s */
+/* One max-hold frame per 2 ms: as short as the fastest ELRS dwell (F1000).
+ * The sink's pace sets this, not the engine; see sdr_sink_pace(). */
+#define FRAME_US          2000u
+#define SLICE_MS          100u
 
-#define SLICE_MS_START    100u
-#define SLICE_MS_MIN      30u
-#define SLICE_MS_MAX      150u
+/* The sink must take a whole slice of frames, plus the one being drained and
+ * the one closed when the slice ends. */
+_Static_assert((SLICE_MS * 1000u / FRAME_US + 2u) * SDR_FRAME_BYTES(NFFT) <= SDR_SINK_BYTES,
+               "sink too small for one slice of frames");
 #define UI_PERIOD_US      250000
 #define STATS_PERIOD_US   5000000
 
@@ -155,9 +159,9 @@ void app_main(void)
                    (unsigned)sdr_engine_sink_capacity());
 
     const sdr_spec_cfg_t spec = {
-        .rate_code = RATE_CODE, .nfft = NFFT, .units_per_frame = UNITS_PER_FRAME, .max_hold = true,
+        .rate_code = RATE_CODE, .nfft = NFFT, .frame_us = FRAME_US, .max_hold = true,
     };
-    uint32_t slice_ms = SLICE_MS_START;
+    const uint32_t slice_ms = SLICE_MS;
     uint32_t drops_total = 0;
     int64_t next_ui = 0, next_stats = 0;
     elrs_status_t st;
@@ -175,22 +179,15 @@ void app_main(void)
             wids_log_event("sdr_error", "\"status\":%" PRIu32 ",\"detail\":%" PRIu32, r.status, r.detail);
         }
 
-        /* Size the slice to what the sink can hold: shorter when frames were
-         * dropped, slowly longer when there was room to spare. */
-        if (r.drops > 0 && slice_ms > SLICE_MS_MIN) {
-            slice_ms -= 10;
-        } else if (r.drops == 0 && r.sink_used < sdr_engine_sink_capacity() / 2 && slice_ms < SLICE_MS_MAX) {
-            slice_ms += 5;
-        }
-
         const int64_t now = esp_timer_get_time();
         if (elrs_evaluate(&a->det, (uint64_t)now, &st)) {
             wids_log_event("elrs",
                            "\"state\":\"%s\",\"score\":%.2f,\"grid_seen\":%u,\"grid_visible\":%u,"
-                           "\"on_grid\":%.2f,\"cv\":%.2f,\"dwell_ms\":%.0f,\"band\":\"2.4GHz-only\"",
+                           "\"on_grid\":%.2f,\"int_grid\":%.2f,\"cv\":%.2f,\"dwell_ms\":%.0f,"
+                           "\"band\":\"2.4GHz-only\"",
                            elrs_state_name(st.state), (double)st.score, st.channels_seen,
-                           st.channels_visible, (double)st.on_grid_ratio, (double)st.uniformity_cv,
-                           (double)st.dwell_ms);
+                           st.channels_visible, (double)st.on_grid_ratio, (double)st.int_grid_ratio,
+                           (double)st.uniformity_cv, (double)st.dwell_ms);
             if (st.state == ELRS_LIKELY) {
                 ui_alert();
                 next_ui = 0;

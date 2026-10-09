@@ -15,6 +15,19 @@
  * verdict can be released a few seconds after the link stops. */
 #define RECENT_TAU_S 1.0f
 
+/* ELRS-LIKELY needs ELRS-grid bursts NOW, not just in the 10 s statistics;
+ * otherwise the verdict outlives the link by the whole window. Even 50 Hz
+ * ELRS gives ~40 on-grid bursts/s over the visible channels. */
+#define MIN_ON_NOW_PER_S 3.0f
+
+/* Bluetooth sends hundreds of bursts per second. If even a few percent of
+ * their centres were misjudged by 0.2+ MHz they would land on the ELRS grid,
+ * so on-grid hits must also be a real share of the integer-MHz traffic.
+ * Simulator (sim/): 50 Hz ELRS beside full-band Bluetooth audio scores 0.26;
+ * Bluetooth alone scores 0.000 once clipped runs are ignored (0.165 before).
+ * A starting value for M2, not a truth. */
+#define MIN_ON_VS_INTEGER 0.08f
+
 /* Upper edges of the dwell buckets (ms) and the value each bucket reports.
  * Centres are the discrete dwell times the ELRS rate table produces. */
 static const float k_dwell_edge_ms[ELRS_DWELL_BUCKETS - 1] = { 3, 6, 10, 14, 21, 33 };
@@ -38,6 +51,7 @@ void elrs_default_config(elrs_config_t *cfg, uint32_t center_khz, uint32_t sampl
     cfg->invert = false;
     cfg->threshold_db = 10;
     cfg->grid_tol_khz = 200;      /* x.4 grid vs Bluetooth's integer MHz: 400 kHz apart */
+    cfg->int_tol_khz = 150;       /* leaves a 50 kHz gap to the ELRS window */
     cfg->narrow_min_khz = 250;
     cfg->narrow_max_khz = 1600;
     cfg->wide_min_khz = 4000;
@@ -99,6 +113,7 @@ static void compute_visible(elrs_detector_t *d)
 static void decay_all(elrs_detector_t *d, float f, float f_recent)
 {
     d->recent_narrow *= f_recent;
+    d->recent_on *= f_recent;
     for (unsigned ch = 0; ch < ELRS_CHANNELS; ch++) {
         d->visits[ch] *= f;
         d->spread[ch] *= f;
@@ -107,6 +122,7 @@ static void decay_all(elrs_detector_t *d, float f, float f_recent)
         d->dwell_hist[b] *= f;
     }
     d->on_bursts *= f;
+    d->int_bursts *= f;
     d->off_bursts *= f;
     d->wide_runs *= f;
 }
@@ -122,8 +138,13 @@ static void close_visit(elrs_detector_t *d, unsigned ch)
     d->in_visit[ch] = false;
 }
 
-/* Classify one run of above-floor bins [k0, k1] (signed bin numbers). */
-static void classify_run(elrs_detector_t *d, const uint8_t *codes, int k0, int k1,
+/* Classify one run of above-floor bins [k0, k1] (signed bin numbers).
+ * `clipped`: the run touches a bin we ignore (band edge, DC guard), so part of
+ * it is unseen and its centre is biased. A clipped wide run is still wide; a
+ * clipped narrow one is not graded at all. Without this, Bluetooth bursts cut
+ * off at 2441-2442 MHz and at the band edges landed on the ELRS grid (found
+ * with the simulator, BUGLOG.md). */
+static void classify_run(elrs_detector_t *d, const uint8_t *codes, int k0, int k1, bool clipped,
                          bool hit_now[ELRS_CHANNELS])
 {
     const float width = (float)(k1 - k0 + 1) * bin_khz(d);
@@ -131,7 +152,7 @@ static void classify_run(elrs_detector_t *d, const uint8_t *codes, int k0, int k
         d->wide_runs += 1.0f;
         return;
     }
-    if (width < (float)d->cfg.narrow_min_khz || width > (float)d->cfg.narrow_max_khz) {
+    if (clipped || width < (float)d->cfg.narrow_min_khz || width > (float)d->cfg.narrow_max_khz) {
         return;
     }
 
@@ -156,9 +177,17 @@ static void classify_run(elrs_detector_t *d, const uint8_t *codes, int k0, int k
     if (ch >= 0 && ch < (long)ELRS_CHANNELS) {
         d->spread[ch] += 1.0f;
     }
+    /* Distance to the nearest integer MHz: where Bluetooth, BLE and 802.15.4
+     * channels are centred. */
+    const float int_frac = fmodf(f_khz, 1000.0f);
+    const float int_dist = int_frac < 500.0f ? int_frac : 1000.0f - int_frac;
+
     if (ch >= 0 && ch < (long)ELRS_CHANNELS && fabsf(off) <= (float)d->cfg.grid_tol_khz) {
         d->on_bursts += 1.0f;
+        d->recent_on += 1.0f;
         hit_now[ch] = true;
+    } else if (int_dist <= (float)d->cfg.int_tol_khz) {
+        d->int_bursts += 1.0f;
     } else {
         d->off_bursts += 1.0f;
     }
@@ -197,11 +226,12 @@ void elrs_push_frame(elrs_detector_t *d, const uint8_t *codes, unsigned bins,
     bool hit_now[ELRS_CHANNELS] = { false };
     const int half = (int)bins / 2;
     int run_start = 0;
-    bool in_run = false;
+    bool in_run = false, start_clipped = false, prev_usable = false;
     uint8_t peak = 0;
     for (int k = -half; k <= half; k++) {
+        const bool usable = k < half && bin_usable(d, k);
         bool above = false;
-        if (k < half && bin_usable(d, k)) {
+        if (usable) {
             const unsigned i = (unsigned)((k + (int)bins) % (int)bins);
             above = (uint32_t)codes[i] * 16u > (uint32_t)d->floor_q4[i] + thr_q4;
             if (codes[i] > peak) {
@@ -211,10 +241,13 @@ void elrs_push_frame(elrs_detector_t *d, const uint8_t *codes, unsigned bins,
         if (above && !in_run) {
             run_start = k;
             in_run = true;
+            start_clipped = !prev_usable;
         } else if (!above && in_run) {
-            classify_run(d, codes, run_start, k - 1, hit_now);
+            /* Ended on an ignored bin rather than on a quiet one: clipped. */
+            classify_run(d, codes, run_start, k - 1, start_clipped || !usable, hit_now);
             in_run = false;
         }
+        prev_usable = usable;
     }
     d->last_peak_code = peak;
 
@@ -293,8 +326,13 @@ bool elrs_evaluate(elrs_detector_t *d, uint64_t now_us, elrs_status_t *out)
         s.activity[ch] = vmax > 0.0f ? (uint8_t)(255.0f * d->visits[ch] / vmax) : 0;
     }
 
-    const float narrow = d->on_bursts + d->off_bursts;
-    s.on_grid_ratio = narrow >= 1.0f ? d->on_bursts / narrow : 0.0f;
+    /* Integer-MHz bursts are neither for nor against ELRS: they are another
+     * system, identified as such. */
+    const float graded = d->on_bursts + d->off_bursts;
+    const float narrow = graded + d->int_bursts;
+    s.on_grid_ratio = graded >= 1.0f ? d->on_bursts / graded : 0.0f;
+    s.int_grid_ratio = narrow >= 1.0f ? d->int_bursts / narrow : 0.0f;
+    s.on_now_per_s = d->recent_on / RECENT_TAU_S;
     s.narrow_per_s = d->recent_narrow / RECENT_TAU_S;
     s.wide_per_s = d->wide_runs / d->cfg.window_s;
 
@@ -320,8 +358,9 @@ bool elrs_evaluate(elrs_detector_t *d, uint64_t now_us, elrs_status_t *out)
     /* Hopping = narrow bursts arriving steadily AND spread over many
      * frequencies. A fixed narrowband carrier fails the spread test. */
     const bool hopper = s.narrow_per_s >= 3.0f && s.distinct_narrow >= 8u;
-    const bool likely = hopper && s.on_grid_ratio >= 0.7f && s.channels_seen >= need_seen &&
-                        s.uniformity_cv <= 1.0f;
+    const bool likely = hopper && s.on_now_per_s >= MIN_ON_NOW_PER_S && s.on_grid_ratio >= 0.7f &&
+                        d->on_bursts >= MIN_ON_VS_INTEGER * d->int_bursts &&
+                        s.channels_seen >= need_seen && s.uniformity_cv <= 1.0f;
     const elrs_state_t cand = likely ? ELRS_LIKELY : hopper ? ELRS_HOPPER : ELRS_QUIET;
 
     if (hopper && d->n_visible > 0) {
@@ -357,8 +396,12 @@ bool elrs_evaluate(elrs_detector_t *d, uint64_t now_us, elrs_status_t *out)
         }
     }
 
+    if (d->state == ELRS_LIKELY) {
+        d->last_likely_us = now_us;
+    }
     s.state = d->state;
     s.last_seen_us = d->last_seen_us;
+    s.last_likely_us = d->last_likely_us;
     s.frames = d->frame_no;
     s.peak_db = (int16_t)(d->db_step ? d->last_peak_code / d->db_step : 0);
     if (d->bins > 0 && d->db_step > 0) {

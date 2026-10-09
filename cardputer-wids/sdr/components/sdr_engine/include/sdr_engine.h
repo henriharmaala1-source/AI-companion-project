@@ -34,7 +34,9 @@ extern "C" {
 typedef struct {
     unsigned rate_code;        /* SDR_RATE_* */
     unsigned nfft;             /* 256, 512, 1024 or 2048 */
-    unsigned units_per_frame;  /* ring units merged per frame (frame duration) */
+    unsigned frame_us;         /* target frame length; see sdr_sink_pace(). The
+                                * S3 engine ignores units_per_frame: frames are
+                                * as long as the output takes to drain. */
     bool     max_hold;         /* per-bin maximum instead of mean */
 } sdr_spec_cfg_t;
 
@@ -51,8 +53,16 @@ typedef struct {
 esp_err_t sdr_engine_init(unsigned center_mhz);
 
 /* Capture spectra for `duration_ms` (interrupts masked meanwhile). Frames go
- * to an internal RAM sink; read them with sdr_engine_read() afterwards. */
+ * to an internal RAM sink; read them with sdr_engine_read() afterwards. The
+ * sink must hold the whole slice: duration_ms * 1000 / frame_us frames. */
 void sdr_engine_run_slice(const sdr_spec_cfg_t *cfg, uint32_t duration_ms, sdr_slice_result_t *out);
+
+/* RAM the engine's output sink takes from the heap. It must hold one whole
+ * capture slice of frames; app_main.c checks that at compile time. */
+#define SDR_SINK_BYTES (16u * 1024u)
+
+/* Bytes in one SPC1 frame of `nfft` bins: header + codes + CRC. */
+#define SDR_FRAME_BYTES(nfft) (28u + (nfft) + 4u)
 
 /* Drain captured bytes (raw SPC1 stream). Returns bytes copied. */
 size_t sdr_engine_read(uint8_t *dst, size_t cap);

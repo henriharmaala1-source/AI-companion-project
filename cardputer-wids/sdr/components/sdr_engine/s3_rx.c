@@ -34,7 +34,6 @@
 
 /* Bytes of spectrum the app can buffer per slice. 256-bin frames are 288 B,
  * so this holds ~42 frames; the engine's own 16 KiB queue holds more. */
-#define SDR_SINK_BYTES (12u * 1024u)
 
 /* The RF writer owns three 64 KiB SRAM banks during capture. Keep them out of
  * the heap and of static sections (upstream sram_guard.ld enforces the
@@ -152,12 +151,13 @@ void sdr_engine_run_slice(const sdr_spec_cfg_t *cfg, uint32_t duration_ms, sdr_s
     c.nfft = cfg->nfft;
     c.duration_ms = duration_ms ? duration_ms : 1; /* 0 would mean "until stopped" */
     c.stride = 1;
-    c.units_per_frame = cfg->units_per_frame ? cfg->units_per_frame : 1;
+    c.units_per_frame = 1;   /* must be non-zero; the S3 path ignores it */
     c.max_hold = cfg->max_hold;
     c.stats = false;
 
     ring_result_t r;
     prepare_rx();
+    sdr_sink_pace(SDR_FRAME_BYTES(cfg->nfft), cfg->frame_us);
     ring_capture_run(&c, &r);
 
     memset(out, 0, sizeof(*out));

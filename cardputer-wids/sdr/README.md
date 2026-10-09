@@ -24,12 +24,14 @@ details view with the channel strip and detector numbers.
 | `components/cp_keyboard`: GPIO-matrix keyboard port | written. Keymap **host-tested**, GPIO side untested |
 | `components/sdr_engine`: esp-sdr engine wrapper, RAM sink, transport overlay | **compiles and links** with the pinned IDF, 0 warnings |
 | `main/`: app loop, M5GFX screen, NDJSON log | **compiles and links**, 0 warnings (our code builds with `-Werror`) |
-| Build files | done. Static data ends 10,000 bytes below the RF ring; app image 796 KB |
+| Build files | done. Static data ends 9,712 bytes below the RF ring; app image 797 KB |
+| `sim/`: whole-firmware simulator on a PC | **11/11 scenarios pass**. Found and fixed 3 bugs (see `../BUGLOG.md`) |
 | On hardware | **nothing has run on a Cardputer yet** |
 
-The synthetic-model tests show the logic does what it claims on a model of
-ELRS, Bluetooth and Wi-Fi taken from source. They do **not** show that the
-Cardputer can see a real transmitter. That is milestone M0 in the plan.
+The tests and the simulator show the logic and timing do what they claim on a
+model of ELRS, Bluetooth, BLE and Wi-Fi taken from their specs. They do **not**
+show that the Cardputer can see a real transmitter. That is milestone M0 in
+the plan.
 
 ## Layout
 
@@ -43,6 +45,7 @@ components/
                  overlay/ring_io.h (replaces upstream's USB transport)
 main/            app_main.c, ui.cpp, ui.h
 test/            run_tests.sh, test_elrs_detect.c, test_keymap.c
+sim/             host simulator: run_sim.sh, scenarios, radio model, shims
 ```
 
 ## Build
@@ -79,6 +82,48 @@ monitor. Reflash that sketch to go back.
 git submodule update --init --recursive   # first time only
 ./test/run_tests.sh
 ```
+
+## Simulate the whole firmware on a PC
+
+```sh
+./sim/run_sim.sh            # every scenario, about 20 s
+./sim/run_sim.sh elrs_50    # one scenario
+./sim/run_sim.sh list
+```
+
+Needs gcc, g++ and zlib headers. Nothing to flash.
+
+**What runs for real:**
+
+- `app_main.c` and `ui.cpp`, drawn by the real M5GFX code into a 240x135 canvas;
+- the detector, the SPC1 decoder, the sink and `wids_log.c`;
+- everything compiled with `-Werror` under ASan/UBSan.
+
+**What is modelled:**
+
+- the air: ELRS at four rates, Bluetooth audio, BLE and Wi-Fi (`sim/rf_scene.c`);
+- esp-sdr's capture loop, reduced to its frame-emission rules, each cited to
+  the upstream line (`sim/sim_engine.c`);
+- time: a virtual clock;
+- key presses: a script.
+
+Each scenario checks:
+
+- the console log is valid NDJSON;
+- the verdict timeline: detection time, no false alarm, release;
+- the screen, from its pixels.
+
+It writes `sim/out/<scenario>/`: `log.ndjson`, screenshots (`film_*.png` every
+5 s) and `summary.txt`.
+
+**Not modelled:**
+
+- the Cardputer's antenna, gain and AGC;
+- strong-signal desense;
+- other SX1280 links (TBS Tracer, Ghost);
+- microwave ovens.
+
+A pass here is necessary, not sufficient. M0 on real hardware decides.
 
 ## Licensing
 

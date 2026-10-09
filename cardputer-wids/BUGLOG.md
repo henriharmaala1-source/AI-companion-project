@@ -8,6 +8,82 @@ Newest at the top.
 
 ---
 
+## Found by the simulator: the RAM sink starved the receiver (listening 17 %)
+
+**Symptom.** The first run of the host simulator (`sdr/sim/`) failed every
+scenario. Every ELRS rate went undetected, the receiver listened only 17 % of
+the time, all 66 slices ended in a 500 ms stall, and the decoder saw corrupt
+frames (`crc_bad` rising by 9 every 5 s).
+
+**Cause.** I assumed `units_per_frame` set the frame length. On the S3, esp-sdr
+ignores it. `ring_capture.c:626` closes a frame "as soon as the previous output
+has drained", and `docs/spectrum.md` says so: *"There is no fixed frame timer"*.
+My sink accepted bytes instantly, so frames came out every ring unit
+(~0.15 ms), and the 12 KiB sink was full ~7 ms into a 100 ms slice. Then:
+
+- the remaining 93 ms merged into one max-hold frame that smeared ~40 hops;
+- the end-of-run drain (`:1764`) spun for its full 500 ms deadline, because
+  nothing could be written;
+- the next run reset the queue (`:1340`) and threw away a frame already half
+  written into the sink, hence the CRC errors.
+
+The adaptive slice length never reacted, because frames merged instead of
+being dropped, so `drops` stayed 0.
+
+**Fix.** The sink is paced: `sdr_sink_pace()` lets in one frame's bytes per
+`frame_us` (2 ms). Because upstream emits only when its queue is empty, the
+transport rate *is* the frame clock. The slice is now a fixed 100 ms, and a
+`_Static_assert` proves the 16 KiB sink holds it. The simulator now shows 93 %
+listening, 2.0 ms frames, 0 corrupt frames and 0 stalls. The pace math is
+32-bit, so no library division is called with interrupts masked. The
+disassembly shows the only call in `sdr_sink_write` is `esp_timer_get_time`,
+which is in IRAM.
+
+**Lesson.** Read what the engine *does*, not what its parameters are called.
+And a model of the upstream rules found this in seconds, where on hardware it
+would have looked like "the antenna can't see ELRS".
+
+---
+
+## Found by the simulator: Bluetooth hid ELRS from the detector
+
+**Symptom.** ELRS 250 Hz beside Bluetooth audio, BLE and Wi-Fi: never
+detected. In a quieter flat it only just passed (on-grid 0.71 against a 0.70
+threshold).
+
+**Cause.** `on_grid_ratio` was ELRS-grid bursts over *all* narrow bursts.
+Bluetooth Classic, BLE and 802.15.4 send hundreds of narrow bursts per
+second, every one counted as evidence against ELRS.
+
+**Fix.** Their channels are centred on integer MHz, which the detector can
+already tell from ELRS's x.4 MHz. They are now counted separately (`int_grid`
+in the log) and left out of the ratio. As a guard, on-grid hits must also be at
+least 8 % of the integer-grid count. ELRS-LIKELY also needs on-grid bursts
+*now* (1 s time constant). Without that the verdict outlived the link by 23 s;
+now it is ~15 s, which is the 10 s hold plus decay.
+
+## Found by the simulator: clipped bursts landed on the ELRS grid
+
+**Symptom.** While checking that guard: loud Bluetooth alone scored 0.165
+on-grid per integer-grid burst, double the guard. All of it was on channels 9,
+41 and 74.
+
+**Cause.** Those are the edges of the usable band and the DC guard beside the
+2442 MHz LO. A burst cut off by an ignored bin has a biased centre, and some
+were pulled onto the x.4 grid.
+
+**Fix.** A narrow run that touches an ignored bin is not graded. A clipped
+wide run still counts as wide. Bluetooth alone now scores 0.000; 50 Hz ELRS
+beside it scores 0.26.
+
+## Found by the simulator: "last ELRS-grid burst 5 s ago", 35 s after the link stopped
+
+Single noise spikes that happen to sit on the grid updated `last_seen_us`. The
+verdict ignored them correctly, but the screen line did not. The screen now
+says **"ELRS last detected N s ago"**, taken from the verdict.
+
+---
+
 ## Link error: "S3 RF ring overlaps BSS"
 
 **Symptom.** The first full build of the ELRS-watch firmware compiled cleanly,
