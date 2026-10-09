@@ -1,0 +1,6 @@
+[submodule "cardputer-wids/sdr/third_party/esp-sdr"]
+	path = cardputer-wids/sdr/third_party/esp-sdr
+	url = https://github.com/ESPARGOS/esp-sdr.git
+[submodule "cardputer-wids/sdr/third_party/M5GFX"]
+	path = cardputer-wids/sdr/third_party/M5GFX
+	url = https://github.com/m5stack/M5GFX.git
