@@ -162,6 +162,7 @@ void app_main(void)
     int64_t next_ui = 0, next_stats = 0;
     elrs_status_t st;
     memset(&st, 0, sizeof(st));
+    bool details = false;
 
     for (;;) {
         sdr_slice_result_t r;
@@ -221,6 +222,10 @@ void app_main(void)
             ui_alert();
             next_ui = 0;
             break;
+        case 'd': /* big answer <-> detector numbers */
+            details = !details;
+            next_ui = 0;
+            break;
         default:
             break;
         }
@@ -230,6 +235,7 @@ void app_main(void)
                 .center_mhz = CENTER_MHZ, .span_mhz = a->cfg.usable_khz / 1000u,
                 .threshold_db = a->cfg.threshold_db, .invert = a->cfg.invert, .slice_ms = slice_ms,
                 .drops = drops_total, .crc_bad = a->dec.crc_bad, .uptime_us = (uint64_t)now,
+                .details = details,
             };
             ui_update(&st, &info);
             next_ui = now + UI_PERIOD_US;

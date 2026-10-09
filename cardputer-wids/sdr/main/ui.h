@@ -19,6 +19,7 @@ typedef struct {
     uint32_t drops;        /* frames the engine dropped, cumulative */
     uint32_t crc_bad;      /* frames rejected by the decoder, cumulative */
     uint64_t uptime_us;
+    bool     details;      /* false: big DETECTED / NOT DETECTED view */
 } ui_info_t;
 
 void ui_init(void);

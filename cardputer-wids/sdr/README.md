@@ -8,6 +8,14 @@ the Cardputer screen and keyboard. Design and milestones:
 This is a separate ESP-IDF image from the Arduino Wi-Fi monitor in
 `../CardputerWIDS`. Both can't run at once: one radio, one mode (constraint 2).
 
+## Screen
+
+The main view is one big answer: **ELRS DETECTED** (red, with a flash) or
+**NOT DETECTED** (green). The line under it says which kind of "not
+detected": no hopping at all, or a hopping signal that isn't on the ELRS
+grid, such as Bluetooth. "Not detected" never means "all clear". `d` toggles a
+details view with the channel strip and detector numbers.
+
 ## Status
 
 | Part | State |

@@ -4,21 +4,23 @@
  * Only C++ file in the project, because M5GFX is C++. Everything it draws
  * comes from plain C structs (ui.h).
  *
+ * Main view: one big answer.
+ *     ELRS DETECTED   (red)    - detector verdict ELRS_LIKELY
+ *     NOT DETECTED    (green)  - anything else
+ * The line under it says WHICH kind of "not detected" it is, because
+ * "not detected" is never "all clear": the device sees 2.4 GHz only, and a
+ * link below the noise or outside the visible channels is simply missed.
+ *
+ * Press 'd' for the details view (channel strip and detector numbers).
+ *
  * Draws directly to the panel, no full-screen sprite: the RF engine reserves
  * 192 KiB of SRAM and a 240x135x16-bit frame buffer (64 KiB) may not fit
  * beside it. Call only BETWEEN capture slices: the engine masks interrupts,
- * and an SPI DMA transfer must not be in flight when it does (waitDMA()).
- *
- * Layout (240 x 135, rotation 1):
- *   y   0  header: mode, LO, "2.4GHz only"
- *   y  12  80-channel activity strip, 3 px per ELRS channel
- *   y  48  verdict line (colour coded)
- *   y  62  metrics
- *   y 112  permanent scope caveat
- *   y 124  key hints
+ * so nothing may be left in flight (waitDMA()).
  */
 #include <M5GFX.h>
 #include <cstdio>
+#include <cstring>
 
 #include "ui.h"
 
@@ -33,18 +35,29 @@ static constexpr uint16_t COL_ALERT = 0xF800;
 static constexpr uint16_t COL_BAR = 0x05FF;
 static constexpr uint16_t COL_HIDDEN = 0x2104;
 
-static constexpr int STRIP_Y = 12;
-static constexpr int STRIP_H = 32;
+static constexpr int BANNER_Y = 14;
+static constexpr int BANNER_H = 62;
 
-static void chrome(void)
+/* What is currently on the panel, so unchanged parts are not redrawn. */
+static int s_drawn_state = -1;
+static bool s_drawn_details = false;
+
+static void footer(void)
 {
-    display.fillScreen(COL_BG);
+    display.fillRect(0, 112, display.width(), 23, COL_BG);
     display.setTextSize(1);
     display.setTextColor(COL_DIM, COL_BG);
     display.setCursor(2, 112);
-    display.print("2.4GHz only. QUIET != clear. No 868/915, no 5.8");
+    display.print("2.4GHz only. Not detected != all clear");
     display.setCursor(2, 124);
-    display.print("[c]lear [+/-]thr [i]nvert [t]est");
+    display.print("[d]etails [c]lear [+/-]thr [i]nv [t]est");
+}
+
+static void clear_all(void)
+{
+    display.fillScreen(COL_BG);
+    footer();
+    s_drawn_state = -1;
 }
 
 extern "C" void ui_init(void)
@@ -52,83 +65,159 @@ extern "C" void ui_init(void)
     display.init();
     display.setRotation(1);
     display.setBrightness(128);
-    chrome();
+    clear_all();
 }
 
 extern "C" void ui_message(const char *line1, const char *line2)
 {
-    display.fillRect(0, 48, display.width(), 60, COL_BG);
+    display.fillRect(0, BANNER_Y, display.width(), 96, COL_BG);
+    display.setTextSize(1);
     display.setTextColor(COL_WARN, COL_BG);
     display.setCursor(2, 50);
     display.print(line1 ? line1 : "");
     display.setCursor(2, 62);
     display.print(line2 ? line2 : "");
     display.waitDMA();
+    s_drawn_state = -1;
 }
 
-static uint16_t state_colour(elrs_state_t s)
+/* Centre a string horizontally at the current text size. */
+static void centred(const char *s, int y)
 {
-    return s == ELRS_LIKELY ? COL_ALERT : s == ELRS_HOPPER ? COL_WARN : COL_OK;
+    const int w = display.textWidth(s);
+    display.setCursor((display.width() - w) / 2, y);
+    display.print(s);
+}
+
+static void draw_banner(elrs_state_t state)
+{
+    const bool detected = state == ELRS_LIKELY;
+    const uint16_t bg = detected ? COL_ALERT : COL_BG;
+    const uint16_t fg = detected ? COL_FG : COL_OK;
+
+    display.fillRect(0, BANNER_Y, display.width(), BANNER_H, bg);
+    if (!detected) {
+        display.drawRect(4, BANNER_Y + 2, display.width() - 8, BANNER_H - 4, COL_OK);
+    }
+    display.setTextColor(fg, bg);
+    display.setTextSize(2);
+    centred("ELRS", BANNER_Y + 8);
+    display.setTextSize(3);
+    centred(detected ? "DETECTED" : "NOT DETECTED", BANNER_Y + 30);
+    display.setTextSize(1);
+}
+
+/* One honest line under the banner: which kind of answer this is. */
+static void draw_reason(const elrs_status_t *st, const ui_info_t *info)
+{
+    char line[64];
+    display.fillRect(0, 80, display.width(), 30, COL_BG);
+    display.setTextSize(1);
+
+    switch (st->state) {
+    case ELRS_LIKELY:
+        display.setTextColor(COL_ALERT, COL_BG);
+        snprintf(line, sizeof(line), "hopping on ELRS grid, %u channels", st->channels_seen);
+        break;
+    case ELRS_HOPPER:
+        display.setTextColor(COL_WARN, COL_BG);
+        snprintf(line, sizeof(line), "other hopping signal (not ELRS grid)");
+        break;
+    default:
+        display.setTextColor(COL_DIM, COL_BG);
+        snprintf(line, sizeof(line), "no hopping signal seen on 2.4 GHz");
+        break;
+    }
+    centred(line, 82);
+
+    display.setTextColor(COL_DIM, COL_BG);
+    if (st->last_seen_us > 0 && info->uptime_us >= st->last_seen_us) {
+        const double ago = (double)(info->uptime_us - st->last_seen_us) / 1e6;
+        if (ago < 600.0) {
+            snprintf(line, sizeof(line), "last ELRS-grid burst %.0f s ago", ago);
+        } else {
+            snprintf(line, sizeof(line), "last ELRS-grid burst %.0f min ago", ago / 60.0);
+        }
+    } else {
+        snprintf(line, sizeof(line), "listening %u MHz +-%u", info->center_mhz, info->span_mhz / 2);
+    }
+    centred(line, 96);
+}
+
+static void draw_details(const elrs_status_t *st, const ui_info_t *info)
+{
+    char line[64];
+    display.fillRect(0, 0, display.width(), 112, COL_BG);
+    display.setTextSize(1);
+
+    display.setTextColor(st->state == ELRS_LIKELY ? COL_ALERT : COL_OK, COL_BG);
+    display.setCursor(2, 1);
+    snprintf(line, sizeof(line), "%s  score %.2f", elrs_state_name(st->state), (double)st->score);
+    display.print(line);
+
+    /* activity strip: one 3 px column per ELRS channel 2400.4 + k MHz */
+    const int y0 = 12, h0 = 32;
+    for (unsigned ch = 0; ch < ELRS_CHANNELS; ch++) {
+        const int x = (int)ch * 3;
+        const int h = (st->activity[ch] * (h0 - 2)) / 255;
+        if (h > 0) {
+            display.fillRect(x, y0 + h0 - 1 - h, 2, h, COL_BAR);
+        } else {
+            display.drawFastHLine(x, y0 + h0 - 1, 2, COL_HIDDEN);
+        }
+    }
+    display.drawFastVLine((int)ELRS_SYNC_CHANNEL * 3 + 1, y0, 3, COL_DIM);
+
+    display.setTextColor(COL_FG, COL_BG);
+    display.setCursor(2, 50);
+    snprintf(line, sizeof(line), "grid ch %u/%u  on-grid %.0f%%", st->channels_seen,
+             st->channels_visible, (double)(st->on_grid_ratio * 100.0f));
+    display.print(line);
+    display.setCursor(2, 62);
+    snprintf(line, sizeof(line), "narrow %.0f/s wide %.0f/s dwell~%.0fms", (double)st->narrow_per_s,
+             (double)st->wide_per_s, (double)st->dwell_ms);
+    display.print(line);
+    display.setCursor(2, 74);
+    snprintf(line, sizeof(line), "flatness %.2f  hops %u MHz +-%u", (double)st->uniformity_cv,
+             info->center_mhz, info->span_mhz / 2);
+    display.print(line);
+    display.setTextColor(COL_DIM, COL_BG);
+    display.setCursor(2, 86);
+    snprintf(line, sizeof(line), "floor %d dB peak %d dB thr %u%s", st->floor_db, st->peak_db,
+             info->threshold_db, info->invert ? " INV" : "");
+    display.print(line);
+    display.setCursor(2, 98);
+    snprintf(line, sizeof(line), "slice %ums drops %u crc %u", (unsigned)info->slice_ms,
+             (unsigned)info->drops, (unsigned)info->crc_bad);
+    display.print(line);
 }
 
 extern "C" void ui_update(const elrs_status_t *st, const ui_info_t *info)
 {
-    char line[64];
     display.startWrite();
 
-    /* header */
-    display.fillRect(0, 0, display.width(), 10, COL_BG);
-    display.setTextColor(COL_FG, COL_BG);
-    display.setCursor(2, 1);
-    snprintf(line, sizeof(line), "ELRS WATCH %uMHz +-%u", info->center_mhz, info->span_mhz / 2);
-    display.print(line);
-
-    /* activity strip: one 3 px column per ELRS channel 2400.4 + k MHz */
-    display.fillRect(0, STRIP_Y, display.width(), STRIP_H, COL_BG);
-    for (unsigned ch = 0; ch < ELRS_CHANNELS; ch++) {
-        const int x = (int)ch * 3;
-        const int h = (st->activity[ch] * (STRIP_H - 2)) / 255;
-        if (h > 0) {
-            display.fillRect(x, STRIP_Y + STRIP_H - 1 - h, 2, h, COL_BAR);
-        } else {
-            display.drawFastHLine(x, STRIP_Y + STRIP_H - 1, 2, COL_HIDDEN);
-        }
+    if (info->details != s_drawn_details) {
+        display.fillRect(0, 0, display.width(), 112, COL_BG);
+        s_drawn_details = info->details;
+        s_drawn_state = -1;
     }
-    /* sync channel marker */
-    display.drawFastVLine((int)ELRS_SYNC_CHANNEL * 3 + 1, STRIP_Y, 3, COL_DIM);
 
-    /* verdict */
-    display.fillRect(0, 48, display.width(), 62, COL_BG);
-    display.setTextSize(1);
-    display.setTextColor(state_colour(st->state), COL_BG);
-    display.setCursor(2, 50);
-    snprintf(line, sizeof(line), "%-11s score %.2f", elrs_state_name(st->state), (double)st->score);
-    display.print(line);
-
-    /* metrics */
-    display.setTextColor(COL_FG, COL_BG);
-    display.setCursor(2, 62);
-    snprintf(line, sizeof(line), "grid ch %u/%u  on-grid %.0f%%", st->channels_seen,
-             st->channels_visible, (double)(st->on_grid_ratio * 100.0f));
-    display.print(line);
-    display.setCursor(2, 74);
-    snprintf(line, sizeof(line), "narrow %.0f/s wide %.0f/s dwell~%.0fms", (double)st->narrow_per_s,
-             (double)st->wide_per_s, (double)st->dwell_ms);
-    display.print(line);
-    display.setCursor(2, 86);
-    if (st->last_seen_us > 0 && info->uptime_us >= st->last_seen_us) {
-        snprintf(line, sizeof(line), "last on-grid %.1fs ago  flat %.2f",
-                 (double)(info->uptime_us - st->last_seen_us) / 1e6, (double)st->uniformity_cv);
+    if (info->details) {
+        draw_details(st, info);
     } else {
-        snprintf(line, sizeof(line), "no on-grid bursts yet");
+        /* header */
+        display.fillRect(0, 0, display.width(), 12, COL_BG);
+        display.setTextSize(1);
+        display.setTextColor(COL_DIM, COL_BG);
+        display.setCursor(2, 2);
+        display.print("ELRS WATCH  receive only");
+        /* The banner only changes when the verdict does: no flicker. */
+        if ((int)st->state != s_drawn_state) {
+            draw_banner(st->state);
+            s_drawn_state = (int)st->state;
+        }
+        draw_reason(st, info);
     }
-    display.print(line);
-    display.setTextColor(COL_DIM, COL_BG);
-    display.setCursor(2, 98);
-    snprintf(line, sizeof(line), "flr %d pk %d thr %u%s sl %ums drop %u crc %u", st->floor_db,
-             st->peak_db, info->threshold_db, info->invert ? " INV" : "", (unsigned)info->slice_ms,
-             (unsigned)info->drops, (unsigned)info->crc_bad);
-    display.print(line);
 
     display.endWrite();
     display.waitDMA(); /* nothing in flight when the next slice masks IRQs */
@@ -138,5 +227,5 @@ extern "C" void ui_alert(void)
 {
     display.fillScreen(COL_ALERT);
     display.waitDMA();
-    chrome();
+    clear_all();
 }
