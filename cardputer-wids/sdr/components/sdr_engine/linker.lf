@@ -1,0 +1,15 @@
+# Same intent as esp-sdr main/targets/esp32s3/linker.lf, retargeted at this
+# component's archive: SPEC mode runs these with interrupts masked between
+# ring polls, so a flash-cache miss must never delay a bank switch.
+[mapping:sdr_engine_s3]
+archive: libsdr_engine.a
+entries:
+    s3_fft_rnd (noflash)
+    s3_unpack (noflash)
+    s3_firdot (noflash)
+    sdr_sink (noflash)
+
+[mapping:sdr_engine_s3_fft]
+archive: libesp-dsp.a
+entries:
+    dsps_fft2r_sc16_aes3 (noflash)

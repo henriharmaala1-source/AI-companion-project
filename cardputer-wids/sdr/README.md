@@ -22,9 +22,9 @@ details view with the channel strip and detector numbers.
 |---|---|
 | `components/elrs_detect`: SPC1 frame decoder and ELRS detector | written, **host-tested** (ASan/UBSan, `-Werror`) on a synthetic model |
 | `components/cp_keyboard`: GPIO-matrix keyboard port | written. Keymap **host-tested**, GPIO side untested |
-| `components/sdr_engine`: esp-sdr engine wrapper, RAM sink, transport overlay | source written, **never compiled** |
-| `main/`: app loop, M5GFX screen, NDJSON log | source written, **never compiled** |
-| Build files (project/component CMake, sdkconfig, partitions) | **not written**: blocked in the session that produced this code, see below |
+| `components/sdr_engine`: esp-sdr engine wrapper, RAM sink, transport overlay | **compiles and links** with the pinned IDF, 0 warnings |
+| `main/`: app loop, M5GFX screen, NDJSON log | **compiles and links**, 0 warnings (our code builds with `-Werror`) |
+| Build files | done. Static data ends 10,000 bytes below the RF ring; app image 796 KB |
 | On hardware | **nothing has run on a Cardputer yet** |
 
 The synthetic-model tests show the logic does what it claims on a model of
@@ -45,25 +45,33 @@ main/            app_main.c, ui.cpp, ui.h
 test/            run_tests.sh, test_elrs_detect.c, test_keymap.c
 ```
 
-## What the missing build files must do
+## Build
 
-The integration points are documented in the sources:
+Needs ESP-IDF at **exactly** commit `25fe69f946311abdaf9ad56591f25fedbc20ac98`
+(6.2.0-dev). The project refuses any other commit unless you pass
+`-DELRS_ALLOW_IDF_MISMATCH=ON`, because the radio engine uses private PHY ABIs.
 
-- **Pinned IDF.** Build only with ESP-IDF commit `25fe69f` (6.2.0-dev). The
-  engine depends on private PHY ABIs.
-- **sdkconfig.** Upstream's S3 settings, from
-  `third_party/esp-sdr/sdkconfig.defaults.esp32s3`: unicore FreeRTOS,
-  interrupt and task watchdogs off, PHY cert-test archive on, 240 MHz. Flash
-  size should match the Cardputer (8 MB on the boards I know of; check yours).
-- **sdr_engine.** Compile a build-time copy of upstream `ring_capture.c`
-  placed next to `overlay/ring_io.h`. A same-directory `#include` beats `-I`
-  (see BUGLOG). Add upstream's S3 `.S` kernels, `rx_recalibration.c`,
-  `rx_calibration_state.c` and `spectrum_stats.c`. Apply upstream's
-  `sram_guard.ld`, `--wrap=chip_v7_set_chan_ana` and
-  `--wrap=set_rx_gain_cal_dc`, plus a linker fragment keeping the S3 kernels
-  and `sdr_sink` in IRAM.
-- **main.** Also builds `../CardputerWIDS/wids_log.c`, so both modes share one
-  NDJSON format.
+```sh
+git submodule update --init --recursive
+# with that IDF commit installed and exported (. $IDF_PATH/export.sh):
+idf.py -C cardputer-wids/sdr build
+idf.py -C cardputer-wids/sdr -p /dev/ttyACM0 flash monitor
+```
+
+## Flash a prebuilt image (no IDF needed)
+
+`cardputer-elrs-watch.bin` is one merged image: bootloader, partition table
+and app, written at offset `0x0`, DIO, 8 MB.
+
+```sh
+pip install esptool
+python -m esptool --chip esp32s3 -p /dev/ttyACM0 write-flash 0x0 cardputer-elrs-watch.bin
+```
+
+On Windows the port is `COMx`; on macOS it's `/dev/cu.usbmodem*`. If the
+Cardputer doesn't enter download mode, hold **G0** while plugging in USB.
+This overwrites whatever is on the device, including the Arduino Wi-Fi
+monitor. Reflash that sketch to go back.
 
 ## Run the host tests
 

@@ -1,0 +1,46 @@
+# Cardputer ELRS watch. Radio/RTOS settings are esp-sdr's S3 profile
+# (third_party/esp-sdr/sdkconfig.defaults.esp32s3), unchanged; only flash,
+# partitions and the console are ours.
+CONFIG_IDF_TARGET="esp32s3"
+
+# --- Cardputer board ------------------------------------------------------
+# 8 MB on the Cardputer boards I know of. The boot log / esptool shows the
+# real size; change this if yours differs.
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- esp-sdr S3 profile ---------------------------------------------------
+CONFIG_ESP_PHY_ENABLE_CERT_TEST=y
+CONFIG_ESP_PHY_DEBUG=y
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_FREERTOS_HZ=1000
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+# CONFIG_PM_ENABLE is not set
+# CONFIG_ESP_WIFI_IRAM_OPT is not set
+# CONFIG_ESP_WIFI_EXTRA_IRAM_OPT is not set
+# CONFIG_ESP_WIFI_RX_IRAM_OPT is not set
+# CONFIG_ESP_WIFI_SLP_IRAM_OPT is not set
+# CONFIG_ESP_PHY_IRAM_OPT is not set
+# CONFIG_ESP_WIFI_AMPDU_TX_ENABLED is not set
+# CONFIG_ESP_WIFI_AMPDU_RX_ENABLED is not set
+# Core 1 runs esp-sdr's bare-metal FFT worker, not FreeRTOS.
+CONFIG_FREERTOS_UNICORE=y
+# Capture slices keep interrupts masked (ring_capture.c), so these watchdogs
+# would fire. Upstream disables them for the same reason.
+# CONFIG_ESP_INT_WDT is not set
+# CONFIG_ESP_TASK_WDT_EN is not set
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=4
+
+# --- ours: SRAM budget ----------------------------------------------------
+# On the S3, DRAM starts where IRAM code ends, and static data must end below
+# the RF ring at 0x3fcb0000 (upstream sram_guard.ld). With M5GFX linked, the
+# first build overshot by ~3 KiB ("S3 RF ring overlaps BSS"). Moving the heap
+# allocator out of IRAM frees ~6 KiB and also takes the SPI master ISR out
+# (that option depends on this one). Safe here: nothing calls heap functions
+# from an IRAM ISR with the flash cache disabled, and the capture loop never
+# allocates. See BUGLOG.md.
+CONFIG_HEAP_PLACE_FUNCTION_INTO_FLASH=y

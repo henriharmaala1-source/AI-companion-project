@@ -8,6 +8,30 @@ Newest at the top.
 
 ---
 
+## Link error: "S3 RF ring overlaps BSS"
+
+**Symptom.** The first full build of the ELRS-watch firmware compiled cleanly,
+then the link stopped on upstream's guard in `sram_guard.ld`: static data
+ended at `0x3fcb0bc0`, 3,008 bytes past the RF ring's start (`0x3fcb0000`).
+
+**Cause.** On the ESP32-S3, DRAM starts where IRAM code ends: they share the
+same SRAM. esp-sdr's own engine already carries ~68 KiB of BSS (16 KiB USB
+queue, 16 KiB accumulator, FFT and window buffers, an 8 KiB core-1 stack).
+Linking M5GFX, the SPI driver and the USB driver added enough IRAM code to
+push the DRAM start up and the end of BSS into the ring.
+
+**Fix.** `CONFIG_HEAP_PLACE_FUNCTION_INTO_FLASH=y` moves ~6 KiB of allocator
+code out of IRAM, and with it the SPI master ISR, since that option depends on
+it. BSS now ends at `0x3fcad8f0`, 10,000 bytes clear. This is safe here: no heap
+function is called from an IRAM ISR while the flash cache is off, and the
+capture loop never allocates.
+
+**Lesson.** Upstream's guard did its job: without it, this would have been a
+heap silently overlapping memory the radio writes into. Watch that margin
+whenever a component is added.
+
+---
+
 ## esp-sdr is welded to one ESP-IDF commit
 
 **What the source says.** esp-sdr's S3 receiver calls PHY ROM functions, wraps
