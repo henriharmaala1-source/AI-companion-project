@@ -38,7 +38,15 @@ of 12 snapshots hit, and the reported channels are on the ELRS grid
 
 The new `scan_ms` comes from the next hardware log.
 
-**Still to measure:** the SF at other packet rates, and range.
+**First range result:** detected at **100–200 m** with the controller inside
+a closed car and no line of sight. That is a hard case: a car body alone
+typically costs 10–20 dB. The controller's TX power setting and whether
+Dynamic Power was on were not recorded. Dynamic Power lowers output when
+the link is good, so a real pilot flying far away would probably transmit
+more.
+
+**Still to measure:** SF at other packet rates, open line-of-sight range,
+range against a known fixed TX power.
 
 ---
 
