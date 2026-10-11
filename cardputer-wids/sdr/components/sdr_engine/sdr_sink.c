@@ -107,6 +107,20 @@ size_t sdr_sink_read(uint8_t *dst, size_t cap)
     return n;
 }
 
+/* Between slices the queue is empty and nobody writes: its RAM can serve
+ * as scratch (the heap has ~12 KB free). Counters restart at 0 so stale
+ * bytes can never be read back as frames. */
+void *sdr_sink_scratch(size_t *bytes)
+{
+    if (s_buf == NULL || s_head != s_tail) {
+        *bytes = 0;
+        return NULL;
+    }
+    s_head = s_tail = 0;
+    *bytes = s_cap;
+    return s_buf;
+}
+
 size_t sdr_sink_used(void) { return s_head - s_tail; }
 size_t sdr_sink_capacity(void) { return s_cap; }
 IRAM_ATTR bool sdr_sink_stop_requested(void) { return s_stop; }

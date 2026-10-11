@@ -15,6 +15,7 @@ void   sdr_sink_pace(uint32_t frame_bytes, uint32_t frame_us);
 
 int    sdr_sink_write(const uint8_t *p, unsigned n);   /* called with IRQs masked */
 size_t sdr_sink_read(uint8_t *dst, size_t cap);
+void  *sdr_sink_scratch(size_t *bytes);   /* the buffer, only while empty */
 size_t sdr_sink_used(void);
 size_t sdr_sink_capacity(void);
 bool   sdr_sink_stop_requested(void);

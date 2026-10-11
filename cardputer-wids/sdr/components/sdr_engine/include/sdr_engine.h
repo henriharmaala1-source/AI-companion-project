@@ -64,6 +64,23 @@ void sdr_engine_run_slice(const sdr_spec_cfg_t *cfg, uint32_t duration_ms, sdr_s
 /* Bytes in one SPC1 frame of `nfft` bins: header + codes + CRC. */
 #define SDR_FRAME_BYTES(nfft) (28u + (nfft) + 4u)
 
+/* Raw I/Q snapshot: up to 3 consecutive ring units (~0.46 ms at 80 MS/s),
+ * gapless, left in the radio's ring memory. Valid until the next slice or
+ * capture. Word format: signed 10-bit I in bits 0..9, Q in bits 10..19. */
+#define SDR_CAPTURE_MAX_SEGS 6u   /* each unit may wrap around its bank once */
+typedef struct {
+    uint32_t status;              /* 0 = ok, else upstream ring_status_t */
+    uint32_t fs_hz;
+    unsigned nseg;
+    const uint32_t *seg[SDR_CAPTURE_MAX_SEGS];
+    uint32_t len[SDR_CAPTURE_MAX_SEGS];
+} sdr_capture_t;
+void sdr_engine_capture(unsigned rate_code, unsigned units, sdr_capture_t *out);
+
+/* The output sink's RAM, lent as scratch while it is empty (after a slice
+ * has been drained, before the next one). NULL while it holds data. */
+void *sdr_engine_scratch(size_t *bytes);
+
 /* Drain captured bytes (raw SPC1 stream). Returns bytes copied. */
 size_t sdr_engine_read(uint8_t *dst, size_t cap);
 

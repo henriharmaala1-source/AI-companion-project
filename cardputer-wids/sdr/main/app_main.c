@@ -29,6 +29,7 @@
 #include "freertos/task.h"
 #include "nvs_flash.h"
 
+#include "chirp_watch.h"
 #include "cp_keyboard.h"
 #include "elrs_detect.h"
 #include "sdr_engine.h"
@@ -242,6 +243,7 @@ void app_main(void)
         fatal("radio init failed", "check IDF pin / build");
     }
     a->fs_hz = sdr_engine_rate_hz(RATE_CODE);
+    chirp_watch_init(RATE_CODE);
     elrs_default_config(&a->cfg, CENTER_MHZ * 1000u, a->fs_hz);
     spc1_init(&a->dec, on_frame, a);
     restart_detector(a, "boot");
@@ -263,6 +265,8 @@ void app_main(void)
     elrs_status_t st;
     memset(&st, 0, sizeof(st));
     bool details = false;
+    elrs_state_t shown_prev = ELRS_QUIET;
+    uint64_t last_detected_us = 0;
 
     for (;;) {
         sdr_slice_result_t r;
@@ -274,6 +278,8 @@ void app_main(void)
         if (r.status != 0) {
             wids_log_event("sdr_error", "\"status\":%" PRIu32 ",\"detail\":%" PRIu32, r.status, r.detail);
         }
+        /* Raw snapshot + chirp test, in the sink's RAM while it is empty. */
+        chirp_watch_step((uint64_t)esp_timer_get_time());
 
         const int64_t now = esp_timer_get_time();
         if (elrs_evaluate(&a->det, (uint64_t)now, &st)) {
@@ -284,10 +290,30 @@ void app_main(void)
                            elrs_state_name(st.state), (double)st.score, st.channels_seen,
                            st.channels_visible, (double)st.on_grid_ratio, (double)st.int_grid_ratio,
                            (double)st.uniformity_cv, (double)st.dwell_ms);
-            if (st.state == ELRS_LIKELY) {
+        }
+
+        /* What the screen says: ELRS if either the grid detector or the
+         * chirp detector says so. */
+        chirp_status_t cs;
+        chirp_watch_status((uint64_t)now, &cs);
+        elrs_status_t shown = st;
+        if (cs.active) {
+            shown.state = ELRS_LIKELY;
+        }
+        if (shown.state != shown_prev) {
+            const bool by_grid = st.state == ELRS_LIKELY;
+            wids_log_event("verdict", "\"state\":\"%s\",\"by\":\"%s\",\"chirp_sf\":%u,\"band\":\"2.4GHz-only\"",
+                           elrs_state_name(shown.state),
+                           cs.active && by_grid ? "chirp+grid" : cs.active ? "chirp" : by_grid ? "grid" : "none",
+                           cs.active ? cs.sf : 0u);
+            if (shown.state == ELRS_LIKELY) {
                 ui_alert();
                 next_ui = 0;
             }
+            shown_prev = shown.state;
+        }
+        if (shown.state == ELRS_LIKELY) {
+            last_detected_us = (uint64_t)now;
         }
 
         switch (cp_kb_poll()) {
@@ -323,6 +349,9 @@ void app_main(void)
             next_ui = 0;
             break;
         }
+        case 'r': /* log the next raw snapshot, to check the dechirp offline */
+            chirp_watch_request_dump();
+            break;
         case 't':
             ui_alert();
             next_ui = 0;
@@ -340,9 +369,10 @@ void app_main(void)
                 .center_mhz = CENTER_MHZ, .span_mhz = a->cfg.usable_khz / 1000u,
                 .threshold_db = a->cfg.threshold_db, .invert = a->cfg.invert, .slice_ms = slice_ms,
                 .drops = drops_total, .crc_bad = a->dec.crc_bad, .uptime_us = (uint64_t)now, .gain = a->gain,
-                .details = details,
+                .details = details, .chirp_active = cs.active, .chirp_sf = cs.sf, .chirp_hits = cs.hits,
+                .chirp_snaps = cs.snaps, .chirp_last_us = cs.last_hit_us, .last_detected_us = last_detected_us,
             };
-            ui_update(&st, &info);
+            ui_update(&shown, &info);
             next_ui = now + UI_PERIOD_US;
         }
         if (now >= next_stats) {
@@ -356,6 +386,7 @@ void app_main(void)
         }
         if (now >= next_diag) {
             log_diag(a);
+            chirp_watch_log((uint64_t)now);
             next_diag = now + DIAG_PERIOD_US;
         }
         if (now >= next_frame) {

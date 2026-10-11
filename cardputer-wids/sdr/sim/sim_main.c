@@ -59,18 +59,20 @@ typedef struct {
 } scenario_t;
 
 static rf_emitter_t elrs(float level, double on, double off, float packet_ms, float air_ms,
-                         unsigned pph, float bw_khz)
+                         unsigned pph, float bw_khz, unsigned sf)
 {
     return (rf_emitter_t){ .kind = RF_ELRS, .level_db = level, .on_s = on, .off_s = off,
                            .packet_ms = packet_ms, .airtime_ms = air_ms, .packets_per_hop = pph,
-                           .bw_khz = bw_khz, .seed = 0x5eed };
+                           .bw_khz = bw_khz, .seed = 0x5eed, .sf = sf, .invert_iq = true };
 }
 
-/* ExpressLRS 2.4 GHz rates, same figures as test/test_elrs_detect.c. */
-static rf_emitter_t elrs_500(float lvl, double on, double off) { return elrs(lvl, on, off, 2.0f, 1.1f, 4, 800); }
-static rf_emitter_t elrs_250(float lvl, double on, double off) { return elrs(lvl, on, off, 4.0f, 2.2f, 4, 800); }
-static rf_emitter_t elrs_50(float lvl, double on, double off) { return elrs(lvl, on, off, 20.0f, 8.0f, 2, 800); }
-static rf_emitter_t elrs_f1000(float lvl, double on, double off) { return elrs(lvl, on, off, 1.0f, 0.25f, 2, 600); }
+/* ExpressLRS 2.4 GHz rates: timing as in test/test_elrs_detect.c, SF from
+ * ExpressLRS src/src/common.cpp. invertIQ on: the harder half for a
+ * detector that only looked for up-chirps. */
+static rf_emitter_t elrs_500(float lvl, double on, double off) { return elrs(lvl, on, off, 2.0f, 1.1f, 4, 800, 5); }
+static rf_emitter_t elrs_250(float lvl, double on, double off) { return elrs(lvl, on, off, 4.0f, 2.2f, 4, 800, 6); }
+static rf_emitter_t elrs_50(float lvl, double on, double off) { return elrs(lvl, on, off, 20.0f, 8.0f, 2, 800, 8); }
+static rf_emitter_t elrs_f1000(float lvl, double on, double off) { return elrs(lvl, on, off, 1.0f, 0.25f, 2, 600, 0); }
 
 static rf_emitter_t wifi(unsigned ch, float lvl, float duty)
 {
@@ -195,15 +197,28 @@ static void sc_elrs_50_beside_bt(scenario_t *s)
 
 static void sc_elrs_weak(scenario_t *s)
 {
-    s->what = "ELRS 6 dB above noise, under the 10 dB threshold: an honest miss";
+    s->what = "ELRS 6 dB above noise: under the grid detector's 10 dB, found by its chirps";
     s->duration_s = 40;
     add(s, elrs_500(6.0f, 2, 1e9));
+    s->expect_detect = true;
+    s->elrs_on_s = 2;
+    s->elrs_off_s = 1e9;
+    s->detect_within_s = 12;
+    s->detect_after_s = 2;
+    shot(s, 39, "end", SHOT_DETECTED);
+}
+
+static void sc_elrs_too_weak(scenario_t *s)
+{
+    s->what = "ELRS 6 dB BELOW the noise per bin: an honest miss, never a guess";
+    s->duration_s = 40;
+    add(s, elrs_500(-6.0f, 2, 1e9));
     shot(s, 39, "end", SHOT_NOT_DETECTED);
 }
 
 static void sc_inverted_then_i(scenario_t *s)
 {
-    s->what = "Hardware delivers a mirrored spectrum; pressing 'i' at 25 s must recover";
+    s->what = "Mirrored spectrum: chirps detect it anyway; 'i' and 'd' still work";
     s->duration_s = 60;
     s->inverted = true;
     add(s, wifi(6, 25.0f, 0.25f));
@@ -212,12 +227,12 @@ static void sc_inverted_then_i(scenario_t *s)
     key(s, 45, 'd');
     key(s, 50, 'd');
     s->expect_detect = true;
-    s->elrs_on_s = 25;   /* the clock for "detect within" starts at the key */
+    s->elrs_on_s = 2;    /* chirp direction flips, both directions are tested */
     s->elrs_off_s = 1e9;
     s->detect_within_s = 12;
-    s->detect_after_s = 0;
+    s->detect_after_s = 2;
     s->need_whys[0] = "invert";
-    shot(s, 20, "before_i", SHOT_ANY);
+    shot(s, 20, "before_i", SHOT_DETECTED);
     shot(s, 40, "after_i", SHOT_DETECTED);
     shot(s, 47, "details", SHOT_DETAILS);
     shot(s, 55, "back", SHOT_DETECTED);
@@ -257,6 +272,7 @@ static const entry_t k_scenarios[] = {
     { "elrs_in_crowd", sc_elrs_in_crowd },
     { "elrs_50_beside_bt", sc_elrs_50_beside_bt },
     { "elrs_weak", sc_elrs_weak },
+    { "elrs_too_weak", sc_elrs_too_weak },
     { "inverted_then_i", sc_inverted_then_i },
     { "keys", sc_keys },
 };

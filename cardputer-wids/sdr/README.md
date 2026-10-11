@@ -8,6 +8,29 @@ the Cardputer screen and keyboard. Design and milestones:
 This is a separate ESP-IDF image from the Arduino Wi-Fi monitor in
 `../CardputerWIDS`. Both can't run at once: one radio, one mode (constraint 2).
 
+## Two detectors
+
+1. **Grid detector** (`elrs_detect`). It works from 2 ms max-hold power spectra:
+   narrow bursts on the 2400.4 + k MHz grid, spread evenly. It also catches
+   FLRC rates. On the first hardware run it could not tell ELRS from clutter
+   (see BUGLOG).
+2. **Chirp detector** (`lora_detect`). Every second slice it takes a raw I/Q
+   snapshot (~0.46 ms) and dechirps it at each ExpressLRS spreading factor,
+   in both directions. LoRa collapses into one FFT peak for one direction
+   only; Wi-Fi, Bluetooth and carriers don't. It reports the SF, which gives
+   the ELRS rate (SF5 500/333 Hz, SF6 250 Hz, SF7 150/100 Hz, SF8 50 Hz). It
+   cannot see FLRC rates (F500, F1000), which aren't LoRa. Presence only: no
+   symbols, packets or IDs are recovered.
+
+The screen says DETECTED if either detector does. The `verdict` log line
+says which one (`grid`, `chirp`, `chirp+grid`).
+
+## Keys
+
+`d` details · `c` clear · `+`/`-` threshold · `i` invert spectrum ·
+`g` gain (AGC → fixed 10…60) · `t` test alert · `r` log the next raw
+snapshot (`bb` baseband + `raw` words, to check the dechirp offline).
+
 ## Screen
 
 The main view is one big answer: **ELRS DETECTED** (red, with a flash) or
@@ -25,7 +48,9 @@ details view with the channel strip and detector numbers.
 | `components/sdr_engine`: esp-sdr engine wrapper, RAM sink, transport overlay | **compiles and links** with the pinned IDF, 0 warnings |
 | `main/`: app loop, M5GFX screen, NDJSON log | **compiles and links**, 0 warnings (our code builds with `-Werror`) |
 | Build files | done. Static data ends 9,712 bytes below the RF ring; app image 797 KB |
-| `sim/`: whole-firmware simulator on a PC | **11/11 scenarios pass**. Found and fixed 3 bugs (see `../BUGLOG.md`) |
+| `components/lora_detect`: LoRa chirp detector (dechirp, SF5–SF8, both directions) | written, **host-tested** on synthetic SX1280-style LoRa: 0 false alarms in 180 interference cases, detects down to +5 dB in-band SNR and when hard-clipped |
+| `main/chirp_watch.c`: raw snapshots between slices, evidence window | in the simulator (12/12 scenarios). **Untested on hardware** |
+| `sim/`: whole-firmware simulator on a PC | **12/12 scenarios pass**. Found and fixed 3 bugs (see `../BUGLOG.md`) |
 | On hardware | **nothing has run on a Cardputer yet** |
 
 The tests and the simulator show the logic and timing do what they claim on a

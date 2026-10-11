@@ -100,7 +100,8 @@ static void parse_line(const char *line)
         return;
     }
     const int64_t t = strtoll(val, NULL, 10);
-    if (strcmp(ev, "elrs") == 0 && field(line, "state", val, sizeof(val)) &&
+    /* The screen follows the combined verdict (grid detector OR chirps). */
+    if (strcmp(ev, "verdict") == 0 && field(line, "state", val, sizeof(val)) &&
         s_log.n_tr < SIM_MAX_TRANSITIONS) {
         s_log.tr[s_log.n_tr++] = (sim_transition_t){ .t_us = t, .state = state_from_name(val) };
     } else if (strcmp(ev, "elrs_config") == 0 && s_log.n_whys < SIM_MAX_WHYS) {

@@ -10,5 +10,8 @@ gcc "${FLAGS[@]}" -I"$C/elrs_detect/include" "$HERE/test_elrs_detect.c" \
     "$C/elrs_detect/elrs_detect.c" "$C/elrs_detect/spc1.c" -lm -o "$OUT/elrs"
 gcc "${FLAGS[@]}" -I"$C/cp_keyboard/include" "$HERE/test_keymap.c" \
     "$C/cp_keyboard/cp_keymap.c" -o "$OUT/keymap"
+gcc "${FLAGS[@]}" -I"$C/lora_detect/include" -I"$HERE" "$HERE/test_lora_detect.c" "$HERE/lora_synth.c" \
+    "$C/lora_detect/lora_detect.c" -lm -o "$OUT/lora"
 "$OUT/elrs"
 "$OUT/keymap"
+"$OUT/lora"

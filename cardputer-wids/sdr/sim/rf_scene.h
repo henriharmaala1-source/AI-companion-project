@@ -41,6 +41,8 @@ typedef struct {
     unsigned packets_per_hop;
     float    bw_khz;        /* occupied bandwidth */
     uint32_t seed;          /* stands in for the binding phrase */
+    unsigned sf;            /* LoRa spreading factor, 0 = FLRC (no chirp) */
+    bool     invert_iq;     /* ExpressLRS invertIQ = UID[5] & 1 */
     /* RF_WIFI */
     unsigned wifi_channel;  /* 1..13 */
     float    duty;          /* fraction of time carrying traffic, 0..1 */

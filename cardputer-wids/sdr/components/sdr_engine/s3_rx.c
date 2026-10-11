@@ -174,6 +174,44 @@ void sdr_engine_run_slice(const sdr_spec_cfg_t *cfg, uint32_t duration_ms, sdr_s
     out->sink_used = sdr_sink_used();
 }
 
+/* Upstream RINGCAP: capture `units` consecutive ring units and leave them in
+ * the banks. Same receiver setup as the spectrum slices. */
+void sdr_engine_capture(unsigned rate_code, unsigned units, sdr_capture_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    ring_config_t c;
+    memset(&c, 0, sizeof(c));
+    c.mode = RING_MODE_CAPTURE;
+    c.rate = rate_code;
+    c.capture_units = units < 1 ? 1 : units > RING_BANKS ? RING_BANKS : units;
+
+    ring_result_t r;
+    prepare_rx();
+    ring_capture_run(&c, &r);
+    out->status = r.status;
+    out->fs_hz = ring_capture_rate_hz(rate_code);
+    if (r.status != 0) {
+        return;
+    }
+    /* Same unit walk as upstream ring_send_capture(). */
+    for (unsigned u = 0; u < r.units && u < RING_BANKS; u++) {
+        const uint32_t *p = ring_capture_bank(r.cap[u].bank);
+        const uint32_t first = r.cap[u].first, n = r.cap[u].count;
+        uint32_t head = RING_PAIRS - first;
+        if (head > n) {
+            head = n;
+        }
+        out->seg[out->nseg] = p + first;
+        out->len[out->nseg++] = head;
+        if (n > head) {
+            out->seg[out->nseg] = p;
+            out->len[out->nseg++] = n - head;
+        }
+    }
+}
+
+void *sdr_engine_scratch(size_t *bytes) { return sdr_sink_scratch(bytes); }
+
 /* Upstream gain_reconfigure(): a forced index alone can leave continuous
  * capture on stale RX state, so redo the whole receive setup. */
 int sdr_engine_set_gain(int code)

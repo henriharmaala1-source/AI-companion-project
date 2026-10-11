@@ -8,6 +8,27 @@ Newest at the top.
 
 ---
 
+## Chirp detector: two flaws the host tests caught before hardware
+
+**1. Strong neighbours took every candidate slot.** A carrier and a
+Bluetooth burst (37–41 dB) each lit several adjacent grid positions, so the 4
+"strongest peaks" never included the 15 dB LoRa signal. Fix: merge
+candidates closer than 1 MHz, test 6, and rank by how far a channel stands
+out from its neighbours rather than by raw power.
+
+**2. The decimator let neighbours bury the chirp.** A plain 64-sample
+integrate-and-dump has −13 dB sidelobes. A carrier 1.9 MHz away leaked into
+the 1.25 MHz baseband 12 dB *above* the LoRa signal. Fix: two stages,
+a triangular 8× filter (double null at 10 MHz) then a 96-tap
+windowed-sinc 8× filter (~50 dB beyond 0.8 MHz). Same cost order, no extra
+memory (streaming).
+
+**Also learned from the ExpressLRS source.** `invertIQ = UID[5] & 1`
+(`tx_main.cpp`), so about half of all links send down-chirps. A detector that
+only looked for up-chirps would miss half of them; both directions are tested.
+
+---
+
 ## First hardware run: ELRS on and ELRS off look the same to the detector
 
 **What the logs showed** (Cardputer, 250 Hz ELRS at ~2 m, `diag`/`frame`

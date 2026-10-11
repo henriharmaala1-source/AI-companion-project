@@ -22,6 +22,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "chirp_watch.h"
 #include "ui.h"
 
 static M5GFX display;
@@ -117,7 +118,12 @@ static void draw_reason(const elrs_status_t *st, const ui_info_t *info)
     switch (st->state) {
     case ELRS_LIKELY:
         display.setTextColor(COL_ALERT, COL_BG);
-        snprintf(line, sizeof(line), "hopping on ELRS grid, %u channels", st->channels_seen);
+        if (info->chirp_active) {
+            snprintf(line, sizeof(line), "LoRa chirps SF%u: ELRS %s", info->chirp_sf,
+                     chirp_elrs_rate(info->chirp_sf));
+        } else {
+            snprintf(line, sizeof(line), "hopping on ELRS grid, %u channels", st->channels_seen);
+        }
         break;
     case ELRS_HOPPER:
         display.setTextColor(COL_WARN, COL_BG);
@@ -134,11 +140,13 @@ static void draw_reason(const elrs_status_t *st, const ui_info_t *info)
      * burst: a single noise spike can land on the grid, and the simulator
      * showed that line claiming ELRS seconds ago long after the link stopped. */
     display.setTextColor(COL_DIM, COL_BG);
-    if (st->state == ELRS_LIKELY) {
+    if (st->state == ELRS_LIKELY && info->chirp_active) {
+        snprintf(line, sizeof(line), "chirps in %u of %u snapshots (5 s)", info->chirp_hits, info->chirp_snaps);
+    } else if (st->state == ELRS_LIKELY) {
         snprintf(line, sizeof(line), "dwell ~%.0f ms, flatness %.2f", (double)st->dwell_ms,
                  (double)st->uniformity_cv);
-    } else if (st->last_likely_us > 0 && info->uptime_us >= st->last_likely_us) {
-        const double ago = (double)(info->uptime_us - st->last_likely_us) / 1e6;
+    } else if (info->last_detected_us > 0 && info->uptime_us >= info->last_detected_us) {
+        const double ago = (double)(info->uptime_us - info->last_detected_us) / 1e6;
         if (ago < 600.0) {
             snprintf(line, sizeof(line), "ELRS last detected %.0f s ago", ago);
         } else {
@@ -184,8 +192,8 @@ static void draw_details(const elrs_status_t *st, const ui_info_t *info)
              (double)st->wide_per_s, (double)st->dwell_ms);
     display.print(line);
     display.setCursor(2, 74);
-    snprintf(line, sizeof(line), "flatness %.2f  hops %u MHz +-%u", (double)st->uniformity_cv,
-             info->center_mhz, info->span_mhz / 2);
+    snprintf(line, sizeof(line), "chirp SF%u %u/%u snaps  flat %.2f", info->chirp_sf, info->chirp_hits,
+             info->chirp_snaps, (double)st->uniformity_cv);
     display.print(line);
     display.setTextColor(COL_DIM, COL_BG);
     display.setCursor(2, 86);

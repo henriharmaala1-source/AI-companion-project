@@ -193,6 +193,15 @@ to this device.*
 | M4 | Field test: indoors/outdoors at 50 / 200 / 500 m, Wi-Fi busy and quiet | Range and false-positive table written into this doc |
 | M5 | Merge with the Wi-Fi monitor as one image, mode switch via reboot | Both modes run from the keyboard |
 
+**Chirp detection (added after the first hardware run).** The power-spectrum
+detector could not separate ELRS from clutter on real hardware. LoRa's own
+waveform can: dechirping a raw I/Q snapshot concentrates a LoRa symbol into
+one FFT bin for exactly one sweep direction. `lora_detect` does this at the
+ExpressLRS SFs (5–8, BW 812.5 kHz, both I/Q polarities) on raw ring captures
+between slices. On synthetic SX1280-style LoRa: 0 false alarms across 180
+interference cases, detection down to +5 dB in-band SNR, unaffected by hard
+clipping. The real check is a snapshot from the Cardputer with the `r` key.
+
 **Before M0: the host simulator (`sdr/sim/`).** The real firmware runs on a PC
 against a modelled radio scene: `app_main.c`, `ui.cpp` through the real M5GFX
 drawing code, the detector, the decoder, the sink and the log. The esp-sdr

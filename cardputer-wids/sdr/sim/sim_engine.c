@@ -27,6 +27,7 @@
 #include <math.h>
 #include <string.h>
 
+#include "lora_synth.h"
 #include "sdr_engine.h"
 #include "sdr_sink.h"
 #include "sim.h"
@@ -42,6 +43,9 @@
 #define PUMP_PERIOD_US    5.0      /* how often the poll loop calls txq_pump() */
 #define RUN_SETUP_US      300      /* prepare_rx() + run setup before unit 0 */
 #define PROCESS_US        2000     /* decode + detect between slices */
+#define CHIRP_SCAN_US     30000    /* lora_scan() on the S3: unknown until measured (scan_ms in the log) */
+#define CAP_UNIT          12288u   /* pairs per ring unit, as upstream */
+#define CAP_NOISE_SIGMA   8.0      /* ADC units per component */
 
 static struct {
     const rf_scene_t *scene;
@@ -287,6 +291,110 @@ size_t sdr_engine_read(uint8_t *dst, size_t cap)
     }
     return n;
 }
+
+/* ------------------------------------------------------------ raw capture */
+
+/* Scene level (dB over noise per 312.5 kHz FFT bin, rf_scene.h) to a
+ * synthesis amplitude for a signal spread over bw_hz. */
+static double amp_for(float level_db, double bw_hz)
+{
+    const double noise_per_bin = 2.0 * CAP_NOISE_SIGMA * CAP_NOISE_SIGMA * (312500.0 / SYNTH_FS);
+    const double bins = bw_hz / 312500.0;
+    return sqrt(pow(10.0, level_db / 10.0) * noise_per_bin * (bins > 1.0 ? bins : 1.0));
+}
+
+static uint32_t mix32(uint32_t x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    return x;
+}
+
+/* ELRS packets overlapping [t0, t0 + dur): LoRa at their hop channel, or
+ * GFSK-like for FLRC rates (no chirp). */
+static void synth_elrs(synth_t *sy, const rf_scene_t *sc, unsigned idx, double t0, double dur, double center)
+{
+    const rf_emitter_t *e = &sc->em[idx];
+    const double start = e->on_s * 1e6, end = e->off_s * 1e6;
+    const double per = e->packet_ms * 1000.0, air = e->airtime_ms * 1000.0;
+    double k0 = floor((t0 - start - air) / per);
+    for (double k = k0 < 0 ? 0 : k0; start + k * per < t0 + dur; k += 1.0) {
+        const double ps = start + k * per;
+        if (ps + air <= t0 || ps >= end) {
+            continue;
+        }
+        const unsigned ch = sc->elrs_seq[idx][((uint64_t)k / e->packets_per_hop) % 240u];
+        const double f = 2400.4e6 + ch * 1e6 - center;
+        if (e->sf == 0) {
+            synth_gfsk(sy, f, amp_for(e->level_db, 600e3));
+            return;
+        }
+        const double sym_us = (double)(1u << e->sf) / 812500.0 * 1e6;
+        int payload = (int)(air / sym_us - 16.25);
+        synth_lora(sy, e->sf, e->invert_iq, f, amp_for(e->level_db, 812500.0), (ps - t0) / 1e6,
+                   (unsigned)(payload < 4 ? 4 : payload));
+    }
+}
+
+void sdr_engine_capture(unsigned rate_code, unsigned units, sdr_capture_t *out)
+{
+    static uint32_t words[3 * CAP_UNIT];
+    static uint32_t seed = 77;
+    memset(out, 0, sizeof(*out));
+    units = units < 1 ? 1 : units > 3 ? 3 : units;
+    const uint32_t n = units * CAP_UNIT;
+    const unsigned fs = sdr_engine_rate_hz(rate_code);
+    const double center = E.center_mhz * 1e6;
+
+    sim_advance_us(RUN_SETUP_US);
+    const double t0 = (double)sim_now_us(), dur = n * 1e6 / fs;
+    synth_t sy;
+    synth_init(&sy, n, seed++);
+    for (unsigned i = 0; i < E.scene->n; i++) {
+        const rf_emitter_t *e = &E.scene->em[i];
+        if (t0 + dur <= e->on_s * 1e6 || t0 >= e->off_s * 1e6) {
+            continue;
+        }
+        const uint32_t h = mix32((uint32_t)(t0 / 100.0) ^ (i * 0x9e37u));
+        switch (e->kind) {
+        case RF_ELRS:
+            synth_elrs(&sy, E.scene, i, t0, dur, center);
+            break;
+        case RF_BT_CLASSIC:   /* busy most of the time: one hop in the window */
+            synth_gfsk(&sy, (2402.0 + h % 79u) * 1e6 - center, amp_for(e->level_db, 1e6));
+            break;
+        case RF_WIFI:
+            if ((h % 1000u) < (uint32_t)(e->duty * 1000.0f)) {
+                synth_ofdm(&sy, (2407.0 + 5.0 * e->wifi_channel) * 1e6 - center, amp_for(e->level_db, 16.6e6));
+            }
+            break;
+        case RF_BLE:          /* sparse 0.4-1 ms events: mostly absent from 0.46 ms */
+            if (h % 10u == 0) {
+                synth_gfsk(&sy, (2404.0 + 2.0 * (h % 37u)) * 1e6 - center, amp_for(e->level_db, 1e6));
+            }
+            break;
+        }
+    }
+    synth_noise(&sy, CAP_NOISE_SIGMA);
+    if (E.inverted) {
+        /* A mirrored spectrum is conjugated I/Q: frequencies flip sign and
+         * chirps change direction. The raw path sees it the same way. */
+        for (uint32_t k = 0; k < n; k++) {
+            sy.q[k] = -sy.q[k];
+        }
+    }
+    (void)synth_pack(&sy, words);
+    synth_free(&sy);
+    sim_advance_us((int64_t)dur + CHIRP_SCAN_US);
+
+    out->fs_hz = fs;
+    out->nseg = 1;
+    out->seg[0] = words;
+    out->len[0] = n;
+}
+
+void *sdr_engine_scratch(size_t *bytes) { return sdr_sink_scratch(bytes); }
 
 /* Gain is not modelled: the scene's levels are what the detector sees. */
 int sdr_engine_set_gain(int code) { return code < 0 ? -1 : code > 82 ? 82 : code; }

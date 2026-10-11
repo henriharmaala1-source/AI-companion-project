@@ -21,6 +21,11 @@ typedef struct {
     uint64_t uptime_us;
     bool     details;      /* false: big DETECTED / NOT DETECTED view */
     int      gain;         /* -1 = hardware AGC, else fixed PHY gain index */
+    bool     chirp_active; /* LoRa chirp verdict holds */
+    uint8_t  chirp_sf;     /* SF of the last LoRa hit, 0 = none */
+    uint16_t chirp_hits, chirp_snaps; /* in the evidence window */
+    uint64_t chirp_last_us;
+    uint64_t last_detected_us;  /* last time the screen said DETECTED, 0 = never */
 } ui_info_t;
 
 void ui_init(void);
