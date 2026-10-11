@@ -246,6 +246,20 @@ signal levels: M0 still decides whether the idea works at all.
 4. **Sandbox note.** `dl.espressif.com` is blocked by this session's egress
    policy. The IDF Python environment was installed from PyPI instead.
 
+## To do
+
+- [ ] **Require hopping for an ELRS verdict.** A chirp verdict also needs hits
+  on at least 3 different grid channels in the evidence window. Fixed-frequency
+  LoRa (mesh, IoT) then never counts. The screen should say "ELRS or similar
+  LoRa RC link": other hopping 2.4 GHz LoRa links with the same settings
+  (TBS Tracer and mLRS are candidates, unverified) would still pass. Add a
+  simulator scenario with a fixed-channel LoRa device that must not trigger.
+- [ ] Field test at a fixed TX power (Dynamic Power off), open line of sight:
+  detection limit and SNR every ~50 m. Repeat in the car to measure its loss.
+- [ ] Check the reported SF at 500 Hz (SF5), 150 Hz (SF7) and 50 Hz (SF8).
+- [ ] Read `scan_ms` from the esp-dsp build (it was 242 ms before).
+- [ ] Soak test: one hour, no crash, no heap drift (12 KB free at boot).
+
 ## Ideas, not scheduled
 
 - **Ignore our own link, flag other ELRS transmitters.** Three ways, from
