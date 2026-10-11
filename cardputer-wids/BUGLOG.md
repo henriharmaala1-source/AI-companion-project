@@ -8,6 +8,24 @@ Newest at the top.
 
 ---
 
+## First real detection: chirps work on hardware
+
+**Result** (Cardputer, ExpressLRS 250 Hz, controller about 2 m away): with
+the controller on, ELRS DETECTED. With it off, NOT DETECTED, and no false
+alarm afterwards. That held with the drone powered on as well.
+
+**Why the drone alone is invisible.** An ELRS receiver transmits only
+telemetry, and only while linked. At 250 Hz the default is `TLM_RATIO_1_64`
+(ExpressLRS `common.cpp`): about 4 packets/s, roughly 1 % airtime. With the
+controller off it is silent, so no passive receiver can see it. An unlinked
+receiver can later start a Wi-Fi AP ("ExpressLRS RX"), which only the Wi-Fi
+monitor mode can see.
+
+**Still to measure:** `scan_ms` on the S3, the hit rate per snapshot, the SF
+reported at other packet rates, and range.
+
+---
+
 ## Chirp detector: two flaws the host tests caught before hardware
 
 **1. Strong neighbours took every candidate slot.** A carrier and a

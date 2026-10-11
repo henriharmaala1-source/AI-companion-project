@@ -193,6 +193,12 @@ to this device.*
 | M4 | Field test: indoors/outdoors at 50 / 200 / 500 m, Wi-Fi busy and quiet | Range and false-positive table written into this doc |
 | M5 | Merge with the Wi-Fi monitor as one image, mode switch via reboot | Both modes run from the keyboard |
 
+**M0 status: first pass.** With the chirp detector, the Cardputer detects a
+250 Hz ExpressLRS controller at about 2 m and clears when it is switched
+off, with no false alarm. The drone's receiver alone is not detectable: it
+only sends telemetry, and only while linked (see BUGLOG). Range, other
+rates and a soak test are still open.
+
 **Chirp detection (added after the first hardware run).** The power-spectrum
 detector could not separate ELRS from clutter on real hardware. LoRa's own
 waveform can: dechirping a raw I/Q snapshot concentrates a LoRa symbol into
