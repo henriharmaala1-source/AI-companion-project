@@ -371,6 +371,7 @@ void app_main(void)
                 .drops = drops_total, .crc_bad = a->dec.crc_bad, .uptime_us = (uint64_t)now, .gain = a->gain,
                 .details = details, .chirp_active = cs.active, .chirp_sf = cs.sf, .chirp_hits = cs.hits,
                 .chirp_snaps = cs.snaps, .chirp_last_us = cs.last_hit_us, .last_detected_us = last_detected_us,
+                .chirp_snr_db = cs.snr_db,
             };
             ui_update(&shown, &info);
             next_ui = now + UI_PERIOD_US;

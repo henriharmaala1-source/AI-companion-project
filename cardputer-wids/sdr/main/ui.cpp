@@ -141,7 +141,8 @@ static void draw_reason(const elrs_status_t *st, const ui_info_t *info)
      * showed that line claiming ELRS seconds ago long after the link stopped. */
     display.setTextColor(COL_DIM, COL_BG);
     if (st->state == ELRS_LIKELY && info->chirp_active) {
-        snprintf(line, sizeof(line), "chirps in %u of %u snapshots (5 s)", info->chirp_hits, info->chirp_snaps);
+        snprintf(line, sizeof(line), "SNR %.0f dB  chirps %u/%u in 5 s", (double)info->chirp_snr_db, info->chirp_hits,
+                 info->chirp_snaps);
     } else if (st->state == ELRS_LIKELY) {
         snprintf(line, sizeof(line), "dwell ~%.0f ms, flatness %.2f", (double)st->dwell_ms,
                  (double)st->uniformity_cv);

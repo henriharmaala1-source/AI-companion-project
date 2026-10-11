@@ -179,6 +179,9 @@ void chirp_watch_status(uint64_t now_us, chirp_status_t *out)
     out->hits = (uint16_t)hits;
     out->snaps = (uint16_t)snaps;
     out->last_hit_us = s.last_hit_us;
+    out->snr_db = s.last_hit.snr_db;
+    out->level_dbfs = s.last_hit.level_dbfs;
+    out->agc = s.last_hit.agc;
 }
 
 void chirp_watch_log(uint64_t now_us)
@@ -200,10 +203,12 @@ void chirp_watch_log(uint64_t now_us)
     }
     wids_log_event("lora",
                    "\"window_snaps\":%u,\"window_hits\":%u,\"active\":%s,\"sf\":%u,\"slope\":%d,"
-                   "\"freq_mhz\":%.2f,\"cand_db\":%.1f,\"cands\":%u,\"sf5_8\":[%s],\"scan_ms\":%.1f,"
+                   "\"freq_mhz\":%.2f,\"cand_db\":%.1f,\"snr_db\":%.1f,\"dbfs\":%.1f,\"agc\":%u,"
+                   "\"cands\":%u,\"sf5_8\":[%s],\"scan_ms\":%.1f,"
                    "\"scan_ms_max\":%.1f,\"snaps\":%" PRIu32 ",\"hits\":%" PRIu32 ",\"cap_err\":%" PRIu32,
                    snaps, hits, now_us < s.active_until_us ? "true" : "false", r->sf, r->slope,
-                   (double)r->freq_hz / 1e6, (double)r->cand_db, r->candidates, sfs,
+                   (double)r->freq_hz / 1e6, (double)r->cand_db, (double)r->snr_db, (double)r->level_dbfs,
+                   r->agc, r->candidates, sfs,
                    (double)s.scan_us_last / 1000.0, (double)s.scan_us_max / 1000.0, s.snaps_total, s.hits_total,
                    s.cap_errors);
 }

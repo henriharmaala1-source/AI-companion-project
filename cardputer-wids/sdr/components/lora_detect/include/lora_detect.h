@@ -41,7 +41,7 @@ extern "C" {
 #define LORA_COARSE_N     256u       /* coarse spectrum used to pick candidates */
 #define LORA_DECIM_RATE   1250000u   /* baseband rate after decimation */
 #define LORA_MAX_BASEBAND 800u       /* decimated samples kept per candidate */
-#define LORA_FFT_MAX      512u       /* SF8 window at 1.25 MS/s is 394 samples */
+#define LORA_FFT_MAX      256u       /* SF8's 394-sample symbol is cut to 256: still ~30x over noise */
 
 /* Scratch the caller provides (floats). The firmware lends it the empty
  * spectrum sink between slices; the heap is too small. */
@@ -76,6 +76,10 @@ typedef struct {
                               * spectrum) both dechirp a burst between them, so this
                               * does NOT settle the spectrum orientation. */
     float    cand_db;        /* candidate channel over its neighbours (narrowband excess) */
+    float    level_dbfs;     /* detected signal power, dB relative to ADC full scale */
+    float    snr_db;         /* detected signal over the noise in its 1.2 MHz baseband */
+    uint8_t  agc;            /* receiver gain index stamped in the snapshot (AGC moves it):
+                              * dBFS is only comparable at the same index */
     unsigned candidates;     /* peaks tested */
     lora_sf_metric_t sf_metric[LORA_SF_MAX - LORA_SF_MIN + 1u]; /* for the reported candidate */
 } lora_result_t;

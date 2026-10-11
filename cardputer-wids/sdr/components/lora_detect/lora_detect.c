@@ -5,13 +5,17 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(ESP_PLATFORM)
+#include "dsps_fft2r.h"
+#endif
+
 /* Candidate selection on the coarse spectrum. Only ELRS grid positions are
  * candidates: 2400.4 + k MHz is x.4 MHz from an integer-MHz LO, or x.6 MHz
  * if the hardware mirrors the spectrum (unconfirmed, plan M0), so both. The
  * baseband is 1.25 MHz wide, so a burst 200 kHz off either still dechirps. */
 #define CAND_MIN_DB      3.0f   /* channel over its neighbours (narrowband excess) */
 #define CAND_FLOOR_DB    3.0f   /* channel over the median bin */
-#define COARSE_BLOCKS    160u   /* FFT blocks averaged: the whole snapshot */
+#define COARSE_BLOCKS    48u    /* FFT blocks averaged, spread over the snapshot */
 #define EDGE_HZ          34e6f  /* ignore beyond: analogue roll-off */
 #define GRID_FRAC_HZ     400e3f /* ELRS grid offset from an integer MHz */
 #define CHAN_HALF_HZ     350e3f /* channel power window: +-350 kHz */
@@ -123,12 +127,38 @@ void lora_fft(float *x, unsigned n)
     }
 }
 
+/* The FFT the scan uses. On the S3: Espressif's optimised esp-dsp routine,
+ * checked on the host against lora_fft() (same e^-j convention, largest
+ * difference 1.6e-5). esp-dsp's init keeps a global pointer to the twiddle
+ * table, so the table is static (1 KB), never scratch. Elsewhere: lora_fft. */
+#if defined(ESP_PLATFORM)
+static float s_twiddle[LORA_FFT_MAX] __attribute__((aligned(16)));
+static bool  s_dsp_ready;
+
+static void fft(float *x, unsigned n)
+{
+    if (!s_dsp_ready) {
+        s_dsp_ready = dsps_fft2r_init_fc32(s_twiddle, LORA_FFT_MAX) == ESP_OK;
+    }
+    if (s_dsp_ready && dsps_fft2r_fc32(x, (int)n) == ESP_OK && dsps_bit_rev_fc32(x, (int)n) == ESP_OK) {
+        return;
+    }
+    lora_fft(x, n);   /* never expected; keeps the scan correct regardless */
+}
+#else
+static void fft(float *x, unsigned n) { lora_fft(x, n); }
+#endif
+
 /* ------------------------------------------------------------ candidates */
 
 typedef struct {
     float freq_hz;
     float db;
 } cand_t;
+
+/* Noise power per complex sample at the full rate, from the coarse
+ * spectrum's median bin: E|X|^2 = sigma^2 * sum(w^2) for white noise. */
+static float s_noise_per_sample;
 
 static int cmp_float(const void *a, const void *b)
 {
@@ -214,7 +244,7 @@ static unsigned find_candidates(const lora_snapshot_t *s, float *power, float *b
             ci = cr * wi + ci * wr;
             cr = nr;
         }
-        lora_fft(buf, n);
+        fft(buf, n);
         for (unsigned k = 0; k < n; k++) {
             power[k] += buf[2 * k] * buf[2 * k] + buf[2 * k + 1] * buf[2 * k + 1];
         }
@@ -224,6 +254,7 @@ static unsigned find_candidates(const lora_snapshot_t *s, float *power, float *b
     memcpy(buf, power, n * sizeof(float));
     qsort(buf, n, sizeof(float), cmp_float);
     const float median = buf[n / 2] > 0.0f ? buf[n / 2] : 1e-9f;
+    s_noise_per_sample = median / ((float)blocks * 0.375f * (float)n);   /* Hann: sum(w^2) = 3n/8 */
 
     unsigned found = 0;
     const float bin_hz = (float)s->fs_hz / (float)n;
@@ -384,7 +415,7 @@ static float window_score(const float *z, const float *ref, unsigned len, unsign
         buf[2 * n + 1] = z[2 * n] * ri + z[2 * n + 1] * rr;
     }
     memset(buf + 2 * len, 0, (nfft - len) * 2 * sizeof(float));
-    lora_fft(buf, nfft);
+    fft(buf, nfft);
     float total = 0.0f, peak = 0.0f;
     unsigned at = 0;
     for (unsigned k = 0; k < nfft; k++) {
@@ -469,6 +500,27 @@ static bool sf_passes(const lora_sf_metric_t *m)
     return m->hit_ratio >= HIT_RATIO_MIN && m->asym >= ASYM_MIN;
 }
 
+/* Strength of a detected signal: the loudest window's mean power (the
+ * packet may cover only part of the snapshot) against the noise expected
+ * in the decimator's ~1.2 MHz bandwidth. */
+static void measure(const float *z, unsigned m, unsigned sf, lora_result_t *out)
+{
+    unsigned len = (unsigned)((float)(1u << sf) * (float)LORA_DECIM_RATE / LORA_BW_HZ);
+    len = len > m ? m : len;
+    float best = 0.0f;
+    for (unsigned s = 0; len > 0 && s + len <= m; s += len) {
+        float p = 0.0f;
+        for (unsigned n = s; n < s + len; n++) {
+            p += z[2 * n] * z[2 * n] + z[2 * n + 1] * z[2 * n + 1];
+        }
+        best = fmaxf(best, p / (float)len);
+    }
+    const float full_scale = 512.0f * 512.0f;   /* 10-bit complex full scale */
+    const float noise = s_noise_per_sample * (1.2e6f / 80e6f);
+    out->level_dbfs = 10.0f * log10f(fmaxf(best, 1e-6f) / full_scale);
+    out->snr_db = 10.0f * log10f(fmaxf(best - noise, 1e-6f) / fmaxf(noise, 1e-9f));
+}
+
 /* ------------------------------------------------------------ scan */
 
 bool lora_scan(const lora_snapshot_t *s, float *work, size_t work_floats, lora_result_t *out)
@@ -489,6 +541,7 @@ bool lora_scan(const lora_snapshot_t *s, float *work, size_t work_floats, lora_r
 
     cand_t cand[LORA_MAX_CAND];
     out->candidates = find_candidates(s, power, buf, cand);
+    out->agc = s->nseg > 0 && s->seg[0].n > 0 ? (uint8_t)(s->seg[0].p[0] >> 20) : 0;
 
     const float rate = (float)LORA_DECIM_RATE;
     float best_rank = -1.0f;
@@ -523,6 +576,7 @@ bool lora_scan(const lora_snapshot_t *s, float *work, size_t work_floats, lora_r
             memcpy(out->sf_metric, metric, sizeof(metric));
         }
         if (out->detected) {
+            measure(z, m, out->sf, out);
             break;   /* presence is the question: no need to test the rest */
         }
     }

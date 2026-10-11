@@ -168,6 +168,15 @@ int main(int argc, char **argv)
         show("", &r);
     }
 
+    printf("signal strength: measured SNR vs truth (expect truth - 1.7 dB: 1.2 MHz noise band vs 812.5 kHz)\n");
+    for (double snr = 25.0; snr >= 5.0; snr -= 10.0) {
+        const lora_result_t r = run(6, false, snr, ch, -1e-3, X_NONE, 0, 1.0, 700 + (uint32_t)snr, NULL);
+        const double expect = snr - 1.7;
+        printf("  true %4.1f dB -> measured SNR %5.1f dB (expect %5.1f), level %6.1f dBFS, agc %u\n", snr,
+               r.snr_db, expect, r.level_dbfs, r.agc);
+        assert(r.detected && fabs(r.snr_db - expect) < 2.0);
+    }
+
     printf("overload: LoRa driven 4x past full scale (clips), like a TX 2 m away\n");
     {
         uint32_t clipped = 0;

@@ -25,6 +25,19 @@ This is a separate ESP-IDF image from the Arduino Wi-Fi monitor in
 The screen says DETECTED if either detector does. The `verdict` log line
 says which one (`grid`, `chirp`, `chirp+grid`).
 
+**Signal strength.** For each chirp detection the `lora` log carries three
+numbers:
+
+- `snr_db`: dB above the noise in the 1.2 MHz baseband. This is shown on
+  screen. It hardly depends on the AGC, so it is the "how close" number.
+  Host-tested to within 0.1 dB.
+- `dbfs`: dB relative to the ADC's full scale.
+- `agc`: the gain index stamped in the snapshot.
+
+Turning `dbfs` and `agc` into dBm needs a calibration: esp-sdr has no
+gain-index-to-dB table. It could be done against the RSSI the ELRS receiver
+itself reports, or by holding the gain fixed with `g`.
+
 ## Keys
 
 `d` details · `c` clear · `+`/`-` threshold · `i` invert spectrum ·

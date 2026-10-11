@@ -21,8 +21,24 @@ controller off it is silent, so no passive receiver can see it. An unlinked
 receiver can later start a Wi-Fi AP ("ExpressLRS RX"), which only the Wi-Fi
 monitor mode can see.
 
-**Still to measure:** `scan_ms` on the S3, the hit rate per snapshot, the SF
-reported at other packet rates, and range.
+**Measured** from the `lora` log: SF6 (correct for 250 Hz) with slope −1,
+so this binding uses inverted IQ. Score 105–115 against a perfect-chirp
+value of ~98, against ~10–13 with the controller off. Asymmetry 21–24×. 6–7
+of 12 snapshots hit, and the reported channels are on the ELRS grid
+(2447.4, 2458.4 MHz).
+
+**Too slow:** `scan_ms` was 242 when nothing was found (all 6 candidates ×
+4 SFs) and 72 on an early hit. Fixes, all host-tested:
+- esp-dsp's S3 FFT in place of plain C. It is checked against the host FFT:
+  same sign convention, largest difference 1.6e-5. Note that it does nothing
+  until `dsps_fft2r_init_fc32` has run, and that init keeps a global pointer
+  to the twiddle table, so the 1 KB table is static.
+- 48 coarse blocks instead of 160.
+- FFTs capped at 256 points.
+
+The new `scan_ms` comes from the next hardware log.
+
+**Still to measure:** the SF at other packet rates, and range.
 
 ---
 
