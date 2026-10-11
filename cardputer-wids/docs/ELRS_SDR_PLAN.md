@@ -243,3 +243,23 @@ signal levels: M0 still decides whether the idea works at all.
    USB-C is the S3's native USB, which the boot log will show.
 4. **Sandbox note.** `dl.espressif.com` is blocked by this session's egress
    policy. The IDF Python environment was installed from PyPI instead.
+
+## Ideas, not scheduled
+
+- **Ignore our own link, flag other ELRS transmitters.** Three ways, from
+  easy to strong. All use only our own link's properties, never other
+  people's packet contents.
+  1. Learn our link's SF and chirp direction, then flag chirps that differ.
+  2. Flag LoRa on two channels in one snapshot: one link transmits on one
+     channel at a time.
+  3. Compute our own hop sequence from our binding phrase (port ExpressLRS
+     FHSS, verified against the source), lock onto its timing, and flag
+     anything off-schedule.
+- **Locate a transmitter with RSSI + GPS.** Log each chirp detection's SNR
+  and level with a GPS fix (Grove GPS unit at 9600 baud, or a phone track
+  merged by time), show hot/cold guidance on the device, and fit the source
+  area on a PC. Expect area-level accuracy (~50–200 m), better when close.
+  ELRS Dynamic Power changes TX power with link quality and confounds
+  RSSI. Keep the log short and identifier-free (GDPR), and report rule
+  breaking to the police or Traficom rather than seeking out the pilot.
+
