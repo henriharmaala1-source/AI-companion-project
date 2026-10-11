@@ -52,6 +52,12 @@ _Static_assert((SLICE_MS * 1000u / FRAME_US + 2u) * SDR_FRAME_BYTES(NFFT) <= SDR
                "sink too small for one slice of frames");
 #define UI_PERIOD_US      250000
 #define STATS_PERIOD_US   5000000
+/* Diagnostic stream for tuning on real hardware: where bursts land ("diag",
+ * every 2 s) and the strongest raw spectrum ("frame", every 5 s, two lines
+ * because a log line holds 512 characters). */
+#define DIAG_PERIOD_US    2000000
+#define FRAME_PERIOD_US   5000000
+#define FRAME_PART_BINS   128u
 
 typedef struct {
     elrs_detector_t det;
@@ -59,6 +65,10 @@ typedef struct {
     elrs_config_t   cfg;
     int64_t         slice_start_us;
     unsigned        fs_hz;
+    /* strongest frame since the last "frame" record */
+    uint8_t         peak_codes[NFFT];
+    uint8_t         peak_max;
+    uint64_t        peak_t_us;
 } app_t;
 
 static app_t *s_app; /* heap, not BSS: static data must end below the RF ring */
@@ -80,6 +90,18 @@ static void on_frame(const spc1_frame_t *f, void *ctx)
     const uint64_t t_us = (uint64_t)a->slice_start_us + f->pair_index * 1000000ull / a->fs_hz;
     const uint32_t dur_us = (uint32_t)((uint64_t)f->pairs * 1000000ull / a->fs_hz);
     elrs_push_frame(&a->det, f->codes, f->bins, f->db_step, t_us, dur_us);
+
+    if (f->bins == NFFT) {
+        uint8_t max = 0;
+        for (unsigned i = 0; i < NFFT; i++) {
+            max = f->codes[i] > max ? f->codes[i] : max;
+        }
+        if (max > a->peak_max) {
+            memcpy(a->peak_codes, f->codes, NFFT);
+            a->peak_max = max;
+            a->peak_t_us = t_us;
+        }
+    }
 }
 
 static void drain_sink(app_t *a)
@@ -101,6 +123,56 @@ static void restart_detector(app_t *a, const char *why)
                    ",\"threshold_db\":%u,\"invert\":%s,\"band\":\"2.4GHz-only\",\"tx\":\"none\"",
                    why, a->cfg.center_khz, a->cfg.sample_rate_hz, (unsigned)a->cfg.threshold_db,
                    a->cfg.invert ? "true" : "false");
+}
+
+/* "[1,2,3]" into out; always NUL-terminated. */
+static void fmt_counts(char *out, size_t cap, const uint32_t *v, size_t n)
+{
+    size_t w = 0;
+    out[0] = '\0';
+    for (size_t i = 0; i < n && w + 1 < cap; i++) {
+        const int k = snprintf(out + w, cap - w, "%c%" PRIu32, i ? ',' : '[', v[i]);
+        if (k < 0) {
+            return;
+        }
+        w = w + (size_t)k < cap ? w + (size_t)k : cap - 1;
+    }
+    if (w + 1 < cap) {
+        out[w++] = ']';
+        out[w] = '\0';
+    }
+}
+
+static void log_diag(app_t *a)
+{
+    elrs_diag_t dg;
+    char phase[160], width[128];
+    elrs_diag_take(&a->det, &dg);
+    fmt_counts(phase, sizeof(phase), dg.phase, ELRS_DIAG_PHASE_BUCKETS);
+    fmt_counts(width, sizeof(width), dg.width, ELRS_DIAG_WIDTH_BUCKETS);
+    wids_log_event("diag",
+                   "\"phase_from_khz\":%d,\"phase_step_khz\":%d,\"phase\":%s,\"width_bins\":%s,"
+                   "\"clipped\":%" PRIu32 ",\"inv\":%s,\"thr_db\":%u",
+                   -500, ELRS_DIAG_PHASE_KHZ, phase, width, dg.clipped, a->cfg.invert ? "true" : "false",
+                   (unsigned)a->cfg.threshold_db);
+}
+
+/* The strongest frame of the period, raw codes in natural FFT order (bin 0 =
+ * LO, then +f, then -f), 0.5 dB per code. */
+static void log_peak_frame(app_t *a)
+{
+    if (a->peak_max == 0) {
+        return;
+    }
+    char hex[2 * FRAME_PART_BINS + 1];
+    for (unsigned part = 0; part < NFFT / FRAME_PART_BINS; part++) {
+        wids_hex_encode(a->peak_codes + part * FRAME_PART_BINS, FRAME_PART_BINS, hex, sizeof(hex));
+        wids_log_event("frame",
+                       "\"t_frame\":%" PRIu64 ",\"part\":%u,\"of\":%u,\"bins\":%u,\"center_mhz\":%u,"
+                       "\"fs\":%u,\"order\":\"natural\",\"db_step\":2,\"hex\":\"%s\"",
+                       a->peak_t_us, part, NFFT / FRAME_PART_BINS, NFFT, CENTER_MHZ, a->fs_hz, hex);
+    }
+    a->peak_max = 0;
 }
 
 static void fatal(const char *a, const char *b)
@@ -163,7 +235,7 @@ void app_main(void)
     };
     const uint32_t slice_ms = SLICE_MS;
     uint32_t drops_total = 0;
-    int64_t next_ui = 0, next_stats = 0;
+    int64_t next_ui = 0, next_stats = 0, next_diag = 0, next_frame = 0;
     elrs_status_t st;
     memset(&st, 0, sizeof(st));
     bool details = false;
@@ -245,6 +317,14 @@ void app_main(void)
                            r.frames, r.drops, r.abandoned, r.ffts, slice_ms, a->dec.crc_bad,
                            r.elapsed_us, (unsigned)r.sink_used);
             next_stats = now + STATS_PERIOD_US;
+        }
+        if (now >= next_diag) {
+            log_diag(a);
+            next_diag = now + DIAG_PERIOD_US;
+        }
+        if (now >= next_frame) {
+            log_peak_frame(a);
+            next_frame = now + FRAME_PERIOD_US;
         }
 
         /* Let the USB driver, esp_timer task and idle task run: the tick

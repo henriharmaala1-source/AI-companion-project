@@ -39,6 +39,11 @@ extern "C" {
 #define ELRS_MAX_BINS     2048u
 #define ELRS_DWELL_BUCKETS 7u
 
+/* Diagnostics for tuning on real hardware (milestone M0/M2). */
+#define ELRS_DIAG_PHASE_BUCKETS 20u   /* 50 kHz each, -500..+500 kHz from the grid */
+#define ELRS_DIAG_PHASE_KHZ     50
+#define ELRS_DIAG_WIDTH_BUCKETS 16u   /* run width 1..15 bins, then 16+ */
+
 typedef enum { ELRS_QUIET = 0, ELRS_HOPPER = 1, ELRS_LIKELY = 2 } elrs_state_t;
 
 typedef struct {
@@ -104,7 +109,20 @@ typedef struct {
     elrs_state_t pending;
     unsigned pending_count;
     uint64_t support_until_us; /* current state is held until here */
+    /* diagnostics, cleared by elrs_diag_take() */
+    uint32_t diag_phase[ELRS_DIAG_PHASE_BUCKETS];
+    uint32_t diag_width[ELRS_DIAG_WIDTH_BUCKETS];
+    uint32_t diag_clipped;
 } elrs_detector_t;
+
+/* Where bursts land, counted since the last take. `phase`: centres of graded
+ * narrow runs relative to the nearest 2400.4 + k MHz line (bucket 10 holds
+ * 0..+50 kHz). `width`: every above-threshold run, in FFT bins. */
+typedef struct {
+    uint32_t phase[ELRS_DIAG_PHASE_BUCKETS];
+    uint32_t width[ELRS_DIAG_WIDTH_BUCKETS];
+    uint32_t clipped;
+} elrs_diag_t;
 
 void elrs_default_config(elrs_config_t *cfg, uint32_t center_khz, uint32_t sample_rate_hz);
 void elrs_init(elrs_detector_t *d, const elrs_config_t *cfg);
@@ -119,6 +137,9 @@ void elrs_push_frame(elrs_detector_t *d, const uint8_t *codes, unsigned bins,
 bool elrs_evaluate(elrs_detector_t *d, uint64_t now_us, elrs_status_t *out);
 
 const char *elrs_state_name(elrs_state_t s);
+
+/* Copy the diagnostic counters out and clear them. */
+void elrs_diag_take(elrs_detector_t *d, elrs_diag_t *out);
 
 #ifdef __cplusplus
 }

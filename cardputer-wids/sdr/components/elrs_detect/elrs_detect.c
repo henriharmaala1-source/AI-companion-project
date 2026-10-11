@@ -147,7 +147,11 @@ static void close_visit(elrs_detector_t *d, unsigned ch)
 static void classify_run(elrs_detector_t *d, const uint8_t *codes, int k0, int k1, bool clipped,
                          bool hit_now[ELRS_CHANNELS])
 {
-    const float width = (float)(k1 - k0 + 1) * bin_khz(d);
+    const int nbins = k1 - k0 + 1;
+    d->diag_width[nbins < (int)ELRS_DIAG_WIDTH_BUCKETS ? nbins - 1 : (int)ELRS_DIAG_WIDTH_BUCKETS - 1]++;
+    d->diag_clipped += clipped ? 1u : 0u;
+
+    const float width = (float)nbins * bin_khz(d);
     if (width >= (float)d->cfg.wide_min_khz) {
         d->wide_runs += 1.0f;
         return;
@@ -172,6 +176,9 @@ static void classify_run(elrs_detector_t *d, const uint8_t *codes, int k0, int k
     const float rel = f_khz - (float)ELRS_BASE_KHZ;
     const long ch = lroundf(rel / (float)ELRS_STEP_KHZ);
     const float off = rel - (float)ch * (float)ELRS_STEP_KHZ;
+    int pb = (int)floorf((off + 500.0f) / (float)ELRS_DIAG_PHASE_KHZ);
+    pb = pb < 0 ? 0 : pb >= (int)ELRS_DIAG_PHASE_BUCKETS ? (int)ELRS_DIAG_PHASE_BUCKETS - 1 : pb;
+    d->diag_phase[pb]++;
 
     d->recent_narrow += 1.0f;
     if (ch >= 0 && ch < (long)ELRS_CHANNELS) {
@@ -191,6 +198,16 @@ static void classify_run(elrs_detector_t *d, const uint8_t *codes, int k0, int k
     } else {
         d->off_bursts += 1.0f;
     }
+}
+
+void elrs_diag_take(elrs_detector_t *d, elrs_diag_t *out)
+{
+    memcpy(out->phase, d->diag_phase, sizeof(out->phase));
+    memcpy(out->width, d->diag_width, sizeof(out->width));
+    out->clipped = d->diag_clipped;
+    memset(d->diag_phase, 0, sizeof(d->diag_phase));
+    memset(d->diag_width, 0, sizeof(d->diag_width));
+    d->diag_clipped = 0;
 }
 
 void elrs_push_frame(elrs_detector_t *d, const uint8_t *codes, unsigned bins,
