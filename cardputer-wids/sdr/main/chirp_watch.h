@@ -17,8 +17,9 @@ extern "C" {
 
 typedef struct {
     bool     active;          /* LoRa verdict holds now */
+    bool     by_weak;         /* ...on agreeing weak snapshots only (lora_detect.h) */
     uint8_t  sf;              /* SF of the last positive snapshot, 0 if none */
-    uint16_t hits, snaps;     /* positive / all snapshots in the evidence window */
+    uint16_t hits, snaps;     /* full-pass / all snapshots in the evidence window */
     uint64_t last_hit_us;     /* 0 = never */
     float    snr_db;          /* last hit: dB over the noise (proximity, AGC-proof) */
     float    level_dbfs;      /* last hit: dB re ADC full scale (needs the same AGC index) */

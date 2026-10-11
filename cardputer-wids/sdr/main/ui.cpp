@@ -109,8 +109,10 @@ static void draw_reason(const elrs_status_t *st, const ui_info_t *info)
     case ELRS_LIKELY:
         display.setTextColor(COL_ALERT, COL_BG);
         if (info->chirp_active) {
-            snprintf(line, sizeof(line), "LoRa chirps SF%u: ELRS %s", info->chirp_sf,
-                     chirp_elrs_rate(info->chirp_sf));
+            /* "weak": the verdict rests on several weak snapshots agreeing
+             * (lora_detect.h), a lower tier of evidence: say so. */
+            snprintf(line, sizeof(line), "LoRa chirps SF%u: ELRS %s%s", info->chirp_sf,
+                     chirp_elrs_rate(info->chirp_sf), info->chirp_weak ? " weak" : "");
         } else {
             snprintf(line, sizeof(line), "hopping on ELRS grid, %u channels", st->channels_seen);
         }
@@ -133,7 +135,11 @@ static void draw_reason(const elrs_status_t *st, const ui_info_t *info)
     if (st->state == ELRS_LIKELY && info->chirp_active) {
         /* Raw level (only comparable at the same gain index), then the
          * AGC-proof SNR and how it moved since the detection began. */
-        snprintf(line, sizeof(line), "raw %.1f dBFS (gain %u)", (double)info->chirp_dbfs, info->chirp_agc);
+        if (info->gain < 0) {
+            snprintf(line, sizeof(line), "raw %.1f dBFS (AGC %u)", (double)info->chirp_dbfs, info->chirp_agc);
+        } else {
+            snprintf(line, sizeof(line), "raw %.1f dBFS (fixed gain %d)", (double)info->chirp_dbfs, info->gain);
+        }
         centred(line, LINES_Y + 22);
         display.setTextColor(info->chirp_delta_db >= 0.0f ? COL_WARN : COL_FG, COL_BG);
         snprintf(line, sizeof(line), "SNR %.0f dB  %+.1f dB since first", (double)info->chirp_snr_db,
@@ -155,6 +161,11 @@ static void draw_reason(const elrs_status_t *st, const ui_info_t *info)
         snprintf(line, sizeof(line), "listening %u MHz +-%u", info->center_mhz, info->span_mhz / 2);
     }
     centred(line, LINES_Y + 24);
+    if (info->gain >= 0) {
+        /* Not the default: keep it in sight while the arrows change it. */
+        snprintf(line, sizeof(line), "fixed gain %d  [g] back to AGC", info->gain);
+        centred(line, LINES_Y + 40);
+    }
 }
 
 static void draw_details(const elrs_status_t *st, const ui_info_t *info)
@@ -191,8 +202,8 @@ static void draw_details(const elrs_status_t *st, const ui_info_t *info)
              (double)st->wide_per_s, (double)st->dwell_ms);
     display.print(line);
     display.setCursor(2, 74);
-    snprintf(line, sizeof(line), "chirp SF%u %u/%u snaps  flat %.2f", info->chirp_sf, info->chirp_hits,
-             info->chirp_snaps, (double)st->uniformity_cv);
+    snprintf(line, sizeof(line), "chirp SF%u %u/%u snaps%s flat %.2f", info->chirp_sf, info->chirp_hits,
+             info->chirp_snaps, info->chirp_weak ? " weak" : "", (double)st->uniformity_cv);
     display.print(line);
     display.setTextColor(COL_DIM, COL_BG);
     display.setCursor(2, 86);
@@ -213,7 +224,7 @@ static void draw_details(const elrs_status_t *st, const ui_info_t *info)
     display.setCursor(2, 112);
     display.print("[d]etails [c]lear [+/-]threshold");
     display.setCursor(2, 124);
-    display.print("[i]nvert [g]ain [r]aw dump [t]est");
+    display.print("[i]nv [g]AGC [;/.]gain [r]aw [t]est");
 }
 
 extern "C" void ui_update(const elrs_status_t *st, const ui_info_t *info)

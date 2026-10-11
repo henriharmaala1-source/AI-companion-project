@@ -14,13 +14,25 @@ This is a separate ESP-IDF image from the Arduino Wi-Fi monitor in
    narrow bursts on the 2400.4 + k MHz grid, spread evenly. It also catches
    FLRC rates. On the first hardware run it could not tell ELRS from clutter
    (see BUGLOG).
-2. **Chirp detector** (`lora_detect`). Every second slice it takes a raw I/Q
+2. **Chirp detector** (`lora_detect`). Between slices it takes a raw I/Q
    snapshot (~0.46 ms) and dechirps it at each ExpressLRS spreading factor,
    in both directions. LoRa collapses into one FFT peak for one direction
    only; Wi-Fi, Bluetooth and carriers don't. It reports the SF, which gives
    the ELRS rate (SF5 500/333 Hz, SF6 250 Hz, SF7 150/100 Hz, SF8 50 Hz). It
    cannot see FLRC rates (F500, F1000), which aren't LoRa. Presence only: no
    symbols, packets or IDs are recovered.
+
+   How often: after each snapshot it waits twice what that snapshot cost
+   (capture + scan), so chirp work takes at most a third of the time. A fast
+   scan runs every slice, a slow one every few. The `lora` log's `step_ms`
+   is that cost.
+
+   Two tiers per snapshot. A **full** pass: 2 in 5 s give a verdict. A
+   **weak** pass (lower score floor, ~1.5 dB more sensitive): it counts only
+   when 3 snapshots in 5 s agree on SF and slope, since chance weak passes
+   (~1 in 200 in a crowded band, host and simulator) land on any of 8 SF/slope
+   pairs. A verdict resting on weak passes only says "weak" on screen and
+   `"chirp_tier":"weak"` in the `verdict` log.
 
 The screen says DETECTED if either detector does. The `verdict` log line
 says which one (`grid`, `chirp`, `chirp+grid`).
@@ -36,13 +48,16 @@ numbers:
 
 Turning `dbfs` and `agc` into dBm needs a calibration: esp-sdr has no
 gain-index-to-dB table. It could be done against the RSSI the ELRS receiver
-itself reports, or by holding the gain fixed with `g`.
+itself reports, or by holding the gain fixed (`g`, arrows).
 
 ## Keys
 
 `d` details · `c` clear · `+`/`-` threshold · `i` invert spectrum ·
-`g` gain (AGC → fixed 10…60) · `t` test alert · `r` log the next raw
-snapshot (`bb` baseband + `raw` words, to check the dechirp offline).
+`g` hardware AGC ↔ fixed gain · `;` (↑) / `.` (↓) fixed gain ±4 (leaves
+AGC; starts from 40, upstream's default index; a PHY index, not dB) ·
+`t` test alert · `r` log the next raw snapshot (`bb` baseband + `raw` words,
+to check the dechirp offline). A fixed gain stays on the main view until `g`
+returns to AGC.
 
 ## Screen
 
@@ -63,11 +78,11 @@ details view with the channel strip and detector numbers.
 | `components/cp_keyboard`: GPIO-matrix keyboard port | written. Keymap **host-tested**, GPIO side untested |
 | `components/sdr_engine`: esp-sdr engine wrapper, RAM sink, transport overlay | **compiles and links** with the pinned IDF, 0 warnings |
 | `main/`: app loop, M5GFX screen, NDJSON log | **compiles and links**, 0 warnings (our code builds with `-Werror`) |
-| Build files | done. Static data ends 9,712 bytes below the RF ring; app image 797 KB |
-| `components/lora_detect`: LoRa chirp detector (dechirp, SF5–SF8, both directions) | written, **host-tested** on synthetic SX1280-style LoRa: 0 false alarms in 180 interference cases, detects down to +5 dB in-band SNR and when hard-clipped |
-| `main/chirp_watch.c`: raw snapshots between slices, evidence window | in the simulator (12/12 scenarios). **Untested on hardware** |
-| `sim/`: whole-firmware simulator on a PC | **12/12 scenarios pass**. Found and fixed 3 bugs (see `../BUGLOG.md`) |
-| On hardware | **nothing has run on a Cardputer yet** |
+| Build files | done. Static data ends 7,872 bytes below the RF ring; app image 807 KB |
+| `components/lora_detect`: LoRa chirp detector (dechirp, SF5–SF8, both directions) | **host-tested** on synthetic SX1280-style LoRa: 0 false alarms in 180 interference cases, 50 % detection per snapshot at about −3 dB in-band SNR (weak tier about −4.5 dB), works when hard-clipped. **Works on hardware** (below) |
+| `main/chirp_watch.c`: raw snapshots between slices, evidence window, weak tier | in the simulator (15/15 scenarios). Full tier works on hardware; weak tier and adaptive rate **not yet run on hardware** |
+| `sim/`: whole-firmware simulator on a PC | **15/15 scenarios pass**, including a 10-minute crowded-band soak. Found and fixed 3 bugs (see `../BUGLOG.md`) |
+| On hardware | Chirp detector detects a 250 Hz ExpressLRS controller (SF6, down-chirps) and clears when it is off; 100–200 m from inside a closed car. Grid detector cannot separate ELRS from clutter. See `../BUGLOG.md` |
 
 The tests and the simulator show the logic and timing do what they claim on a
 model of ELRS, Bluetooth, BLE and Wi-Fi taken from their specs. They do **not**

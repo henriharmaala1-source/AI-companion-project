@@ -64,12 +64,21 @@ typedef struct {
     float score;             /* concentration: top-bin energy / mean, best window */
     float asym;              /* that score over the other slope's, same window */
     float hit_ratio;         /* windows that passed both tests / all windows */
+    float hit_ratio_weak;    /* the same at the lower "weak" score floor */
     int8_t slope;            /* +1 up-chirps, -1 down-chirps (in the snapshot's frame) */
 } lora_sf_metric_t;
 
+/* Two tiers of evidence per snapshot:
+ *   detected - passes the full tests. One such snapshot is already rare
+ *              without LoRa (0 in every host negative case).
+ *   weak     - passes only at a lower score floor (detected implies weak).
+ *              About 1 snapshot in 150 with Bluetooth/Wi-Fi-like signals
+ *              is weak by chance, at a random SF and slope, so a weak hit
+ *              means something only when several agree (chirp_watch.c). */
 typedef struct {
     bool     detected;
-    uint8_t  sf;             /* 5..8 when detected, else best guess or 0 */
+    bool     weak;
+    uint8_t  sf;             /* 5..8 when detected or weak, else 0 */
     int8_t   slope;
     float    freq_hz;        /* candidate: ELRS grid position, offset from the LO, snapshot frame.
                               * +-200 kHz: the x.4 and x.6 positions (normal and mirrored

@@ -13,8 +13,14 @@
  * candidates: 2400.4 + k MHz is x.4 MHz from an integer-MHz LO, or x.6 MHz
  * if the hardware mirrors the spectrum (unconfirmed, plan M0), so both. The
  * baseband is 1.25 MHz wide, so a burst 200 kHz off either still dechirps. */
-#define CAND_MIN_DB      3.0f   /* channel over its neighbours (narrowband excess) */
-#define CAND_FLOOR_DB    3.0f   /* channel over the median bin */
+/* A LoRa signal at 0 dB SNR raises its channel only ~3 dB, so a 3 dB gate
+ * lost everything below about +1 dB. 48 averaged blocks keep the estimate's
+ * spread to a few tenths of a dB, so 1 dB is still clear of noise. Host
+ * sweep: 50% detection moved from about +1 to about -3.5 dB SNR (SF6), no
+ * false alarm added. A false candidate costs time, never a false alarm:
+ * the dechirp decides. */
+#define CAND_MIN_DB      1.0f   /* channel over its neighbours (narrowband excess) */
+#define CAND_FLOOR_DB    1.0f   /* channel over the median bin */
 #define COARSE_BLOCKS    48u    /* FFT blocks averaged, spread over the snapshot */
 #define EDGE_HZ          34e6f  /* ignore beyond: analogue roll-off */
 #define GRID_FRAC_HZ     400e3f /* ELRS grid offset from an integer MHz */
@@ -25,6 +31,7 @@
 /* Per-window tests. A window passes when its concentration is high AND the
  * opposite slope's is much lower: noise and non-chirps fail the second. */
 #define SCORE_MIN_FRAC   0.25f  /* of the window length, i.e. of a perfect chirp */
+#define SCORE_WEAK_FRAC  0.18f  /* the weak tier (lora_detect.h): ~1.5 dB more */
 #define SCORE_MIN_ABS    12.0f  /* noise alone scores ~7-9 */
 #define ASYM_MIN         2.5f
 /* Snapshot verdict for one SF and slope. */
@@ -462,18 +469,21 @@ static lora_sf_metric_t test_sf(const float *z, unsigned m, unsigned sf, float r
     make_ref(ref, len, sf, rate);
 
     const unsigned hop = len / 2 > 0 ? len / 2 : 1;
-    unsigned windows = 0, hits_up = 0, hits_down = 0;
+    unsigned windows = 0, hits_up = 0, hits_down = 0, weak_up = 0, weak_down = 0;
     float best_up = 0.0f, best_down = 0.0f, asym_up = 0.0f, asym_down = 0.0f;
     for (unsigned s = 0; s + len <= m; s += hop) {
         const float up = window_score(z + 2 * s, ref, len, nfft, +1, buf);
         const float down = window_score(z + 2 * s, ref, len, nfft, -1, buf);
         const float floor_score = fmaxf(SCORE_MIN_ABS, SCORE_MIN_FRAC * (float)len);
+        const float floor_weak = fmaxf(SCORE_MIN_ABS, SCORE_WEAK_FRAC * (float)len);
         windows++;
-        if (up >= floor_score && up >= ASYM_MIN * down) {
-            hits_up++;
+        if (up >= floor_weak && up >= ASYM_MIN * down) {
+            weak_up++;
+            hits_up += up >= floor_score;
         }
-        if (down >= floor_score && down >= ASYM_MIN * up) {
-            hits_down++;
+        if (down >= floor_weak && down >= ASYM_MIN * up) {
+            weak_down++;
+            hits_down += down >= floor_score;
         }
         if (up > best_up) {
             best_up = up;
@@ -487,17 +497,20 @@ static lora_sf_metric_t test_sf(const float *z, unsigned m, unsigned sf, float r
     if (windows == 0) {
         return best;
     }
-    const bool up_wins = hits_up > hits_down || (hits_up == hits_down && best_up >= best_down);
+    const bool up_wins = hits_up != hits_down ? hits_up > hits_down
+                       : weak_up != weak_down ? weak_up > weak_down
+                       : best_up >= best_down;
     best.slope = up_wins ? +1 : -1;
     best.score = up_wins ? best_up : best_down;
     best.asym = up_wins ? asym_up : asym_down;
     best.hit_ratio = (float)(up_wins ? hits_up : hits_down) / (float)windows;
+    best.hit_ratio_weak = (float)(up_wins ? weak_up : weak_down) / (float)windows;
     return best;
 }
 
-static bool sf_passes(const lora_sf_metric_t *m)
+static bool sf_passes(const lora_sf_metric_t *m, bool weak)
 {
-    return m->hit_ratio >= HIT_RATIO_MIN && m->asym >= ASYM_MIN;
+    return (weak ? m->hit_ratio_weak : m->hit_ratio) >= HIT_RATIO_MIN && m->asym >= ASYM_MIN;
 }
 
 /* Strength of a detected signal: the loudest window's mean power (the
@@ -549,8 +562,8 @@ bool lora_scan(const lora_snapshot_t *s, float *work, size_t work_floats, lora_r
     for (unsigned c = 0; c < out->candidates; c++) {
         const unsigned m = to_baseband(s, cand[c].freq_hz, taps, z, LORA_MAX_BASEBAND);
         lora_sf_metric_t metric[LORA_SF_MAX - LORA_SF_MIN + 1u];
-        int pick = -1;
-        float pick_rank = -1.0f;
+        int pick = -1, pick_weak = -1;
+        float pick_rank = -1.0f, weak_rank = -1.0f;
         for (unsigned sf = LORA_SF_MIN; sf <= LORA_SF_MAX; sf++) {
             lora_sf_metric_t *mt = &metric[sf - LORA_SF_MIN];
             *mt = test_sf(z, m, sf, rate, ref, buf);
@@ -558,25 +571,35 @@ bool lora_scan(const lora_snapshot_t *s, float *work, size_t work_floats, lora_r
              * relative to that SF's window length: the right SF wins. */
             const float len = fminf((float)(1u << sf) * rate / LORA_BW_HZ, (float)m);
             const float rank = mt->score / fmaxf(len, 1.0f);
-            if (sf_passes(mt) && rank > pick_rank) {
+            if (sf_passes(mt, false) && rank > pick_rank) {
                 pick_rank = rank;
                 pick = (int)sf;
             }
+            if (sf_passes(mt, true) && rank > weak_rank) {
+                weak_rank = rank;
+                pick_weak = (int)sf;
+            }
         }
-        /* Report the candidate that passed with the best rank, else the
-         * strongest one (so the log always shows what was measured). */
-        const float cand_rank = pick >= 0 ? 1.0f + pick_rank : (c == 0 ? 0.0f : -1.0f);
+        /* Report the best candidate: a full pass beats a weak one beats
+         * none; with none, the strongest (so the log shows what was measured). */
+        const int use = pick >= 0 ? pick : pick_weak;
+        const float cand_rank = pick >= 0 ? 2.0f + pick_rank
+                              : pick_weak >= 0 ? 1.0f + weak_rank
+                              : (c == 0 ? 0.0f : -1.0f);
         if (cand_rank > best_rank) {
             best_rank = cand_rank;
             out->detected = pick >= 0;
-            out->sf = pick >= 0 ? (uint8_t)pick : 0;
-            out->slope = pick >= 0 ? metric[pick - (int)LORA_SF_MIN].slope : 0;
+            out->weak = use >= 0;
+            out->sf = use >= 0 ? (uint8_t)use : 0;
+            out->slope = use >= 0 ? metric[use - (int)LORA_SF_MIN].slope : 0;
             out->freq_hz = cand[c].freq_hz;
             out->cand_db = cand[c].db;
             memcpy(out->sf_metric, metric, sizeof(metric));
+            if (use >= 0) {
+                measure(z, m, out->sf, out);   /* now: the next candidate reuses z */
+            }
         }
         if (out->detected) {
-            measure(z, m, out->sf, out);
             break;   /* presence is the question: no need to test the rest */
         }
     }

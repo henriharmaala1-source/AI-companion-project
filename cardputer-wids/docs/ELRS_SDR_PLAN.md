@@ -207,14 +207,20 @@ waveform can: dechirping a raw I/Q snapshot concentrates a LoRa symbol into
 one FFT bin for exactly one sweep direction. `lora_detect` does this at the
 ExpressLRS SFs (5–8, BW 812.5 kHz, both I/Q polarities) on raw ring captures
 between slices. On synthetic SX1280-style LoRa: 0 false alarms across 180
-interference cases, detection down to +5 dB in-band SNR, unaffected by hard
-clipping. The real check is a snapshot from the Cardputer with the `r` key.
+interference cases, unaffected by hard clipping. Sensitivity (SF6, one
+snapshot, 50 %): about +1 dB in-band SNR at first; about −3 dB after the
+candidate gate went from 3 to 1 dB, and about −4.5 dB for the weak tier
+(three agreeing snapshots). The simulator detects ELRS 250 Hz at −3 dB
+(the old build missed it) and, through the weak tier alone, at −5 dB. Ten
+simulated minutes of a crowded band gave 24 chance weak passes in 4,306
+snapshots and no verdict. The real check is a snapshot from the Cardputer
+with the `r` key.
 
 **Before M0: the host simulator (`sdr/sim/`).** The real firmware runs on a PC
 against a modelled radio scene: `app_main.c`, `ui.cpp` through the real M5GFX
 drawing code, the detector, the decoder, the sink and the log. The esp-sdr
 engine is reduced to its frame-emission rules, each one cited to the upstream
-line. It checks the log, the verdict timeline and the screen in 11 scenarios.
+line. It checks the log, the verdict timeline and the screen in 15 scenarios.
 Its first run found the sink bug and two detector bugs in `BUGLOG.md`. It
 validates logic and timing. It cannot validate the antenna, the AGC or real
 signal levels: M0 still decides whether the idea works at all.
@@ -254,18 +260,32 @@ signal levels: M0 still decides whether the idea works at all.
   LoRa RC link": other hopping 2.4 GHz LoRa links with the same settings
   (TBS Tracer and mLRS are candidates, unverified) would still pass. Add a
   simulator scenario with a fixed-channel LoRa device that must not trigger.
-- [ ] **Dechirp ELRS grid channels even when they don't stand out.** Inside
-  an overlapping Wi-Fi channel, candidate selection loses ~5 dB. Synthetic
-  test, ELRS SF6 inside continuous Wi-Fi at equal power: full scan 2/20, the
-  dechirp on the right channel 19/20. Rotate through the grid channels across
-  snapshots, alongside the bump-based candidates.
-- [ ] **Revisit the dechirp threshold** (now 25 % of a perfect chirp: the
-  limit is LoRa ~ equal to Wi-Fi in its channel). Theory allows roughly
-  −5 to −9 dB, but only after a false-alarm test on long real recordings.
+- [x] **Software range, no hardware needed** (host sweep + simulator):
+  candidate gate 3 → 1 dB (~4 dB), weak tier with SF/slope agreement
+  (~1.5 dB), snapshot rate set by measured cost instead of every second
+  slice. Gain on the arrow keys for the field test.
+- [ ] **Confirm the weak tier on real air.** Its false-alarm rate is from
+  synthetic interferers only. Soak test: count `weak_only` in the `lora` log
+  over an hour with no ELRS around; a `"chirp_tier":"weak"` verdict there is
+  a false alarm.
+- [ ] **Dechirp every grid channel in one pass (wideband dechirp).** Inside
+  an overlapping Wi-Fi channel, candidate selection still loses dB (before the
+  1 dB gate, synthetic test at equal power: full scan 2/20, the dechirp on the
+  right channel 19/20). Multiplying the whole 80 MS/s capture by one reference
+  chirp turns every LoRa channel into a tone at its own offset, so one long
+  FFT (~8192 points for SF6) tests all channels at once. Blocker: 32–64 KiB
+  of work memory; the only candidate is part of the RF ring between
+  captures, which needs a hardware check.
+- [ ] **Grid detector listening time.** Snapshots every slice (simulator,
+  30 ms modelled scan) cut its listening from 82 % to 72 %. Fine while the
+  chirp detector carries the verdict; revisit if the grid detector is kept.
 - [ ] Field test at a fixed TX power (Dynamic Power off), open line of sight:
   detection limit and SNR every ~50 m. Repeat in the car to measure its loss.
 - [ ] Check the reported SF at 500 Hz (SF5), 150 Hz (SF7) and 50 Hz (SF8).
-- [ ] Read `scan_ms` from the esp-dsp build (it was 242 ms before).
+- [ ] Read `scan_ms` and `step_ms` from the esp-dsp build (scan was 242 ms
+  before). They set the snapshot rate now.
+- [ ] Gain sweep with the arrow keys at a fixed distance: does a fixed gain
+  above what AGC picks raise `snr_db` near Wi-Fi?
 - [ ] Soak test: one hour, no crash, no heap drift (12 KB free at boot).
 
 ## Ideas, not scheduled

@@ -59,6 +59,10 @@ _Static_assert((SLICE_MS * 1000u / FRAME_US + 2u) * SDR_FRAME_BYTES(NFFT) <= SDR
 #define DIAG_PERIOD_US    2000000
 #define FRAME_PERIOD_US   5000000
 #define FRAME_PART_BINS   128u
+/* Fixed receiver gain from the arrow keys: a PHY index, not dB (upstream has
+ * no table). 40 is upstream's default fixed index (s3_rx.c). */
+#define GAIN_DEFAULT      40
+#define GAIN_STEP         4
 
 typedef struct {
     elrs_detector_t det;
@@ -77,6 +81,7 @@ typedef struct {
     uint8_t         gain_lo, gain_hi;
     bool            gain_seen;
     int             gain;          /* -1 = hardware AGC, else fixed index */
+    int             gain_fixed;    /* last fixed index: where 'g' and the arrows resume */
 } app_t;
 
 static app_t *s_app; /* heap, not BSS: static data must end below the RF ring */
@@ -237,7 +242,8 @@ void app_main(void)
         fatal("out of memory", "detector state");
     }
     app_t *a = s_app;
-    a->gain = -1;   /* hardware AGC until 'g' is pressed */
+    a->gain = -1;   /* hardware AGC until 'g' or an arrow key is pressed */
+    a->gain_fixed = GAIN_DEFAULT;
 
     if (sdr_engine_init(CENTER_MHZ) != ESP_OK) {
         fatal("radio init failed", "check IDF pin / build");
@@ -302,10 +308,12 @@ void app_main(void)
         }
         if (shown.state != shown_prev) {
             const bool by_grid = st.state == ELRS_LIKELY;
-            wids_log_event("verdict", "\"state\":\"%s\",\"by\":\"%s\",\"chirp_sf\":%u,\"band\":\"2.4GHz-only\"",
+            wids_log_event("verdict",
+                           "\"state\":\"%s\",\"by\":\"%s\",\"chirp_tier\":\"%s\",\"chirp_sf\":%u,"
+                           "\"band\":\"2.4GHz-only\"",
                            elrs_state_name(shown.state),
                            cs.active && by_grid ? "chirp+grid" : cs.active ? "chirp" : by_grid ? "grid" : "none",
-                           cs.active ? cs.sf : 0u);
+                           !cs.active ? "none" : cs.by_weak ? "weak" : "full", cs.active ? cs.sf : 0u);
             if (shown.state == ELRS_LIKELY) {
                 ui_alert();
                 next_ui = 0;
@@ -316,7 +324,8 @@ void app_main(void)
             last_detected_us = (uint64_t)now;
         }
 
-        switch (cp_kb_poll()) {
+        const uint8_t key = cp_kb_poll();
+        switch (key) {
         case 'c':
             restart_detector(a, "clear");
             break;
@@ -337,14 +346,21 @@ void app_main(void)
             a->cfg.invert = !a->cfg.invert;
             restart_detector(a, "invert");
             break;
-        case 'g': { /* AGC -> fixed 10, 20 ... 60 -> AGC: find a gain that does not overload */
-            static const int k_gains[] = { -1, 10, 20, 30, 40, 50, 60 };
-            const size_t n = sizeof(k_gains) / sizeof(k_gains[0]);
-            size_t i = 0;
-            while (i < n && k_gains[i] != a->gain) {
-                i++;
-            }
-            a->gain = sdr_engine_set_gain(k_gains[(i + 1) % n]);
+        case 'g': /* hardware AGC <-> the last fixed gain */
+            a->gain = sdr_engine_set_gain(a->gain < 0 ? a->gain_fixed : -1);
+            restart_detector(a, "gain");
+            next_ui = 0;
+            break;
+        case ';': /* the up arrow, unshifted: more fixed gain (leaves AGC) */
+        case '.': { /* the down arrow: less */
+            /* From AGC the first press steps from the last fixed gain
+             * (upstream's default index 40 until one was set): the PHY
+             * index is not dB and AGC's own index is not read back here. */
+            const int step = key == ';' ? GAIN_STEP : -GAIN_STEP;
+            int want = a->gain_fixed + step;
+            want = want < 0 ? 0 : want > (int)sdr_engine_gain_max() ? (int)sdr_engine_gain_max() : want;
+            a->gain = sdr_engine_set_gain(want);
+            a->gain_fixed = a->gain >= 0 ? a->gain : a->gain_fixed;
             restart_detector(a, "gain");
             next_ui = 0;
             break;
@@ -369,7 +385,7 @@ void app_main(void)
                 .center_mhz = CENTER_MHZ, .span_mhz = a->cfg.usable_khz / 1000u,
                 .threshold_db = a->cfg.threshold_db, .invert = a->cfg.invert, .slice_ms = slice_ms,
                 .drops = drops_total, .crc_bad = a->dec.crc_bad, .uptime_us = (uint64_t)now, .gain = a->gain,
-                .details = details, .chirp_active = cs.active, .chirp_sf = cs.sf, .chirp_hits = cs.hits,
+                .details = details, .chirp_active = cs.active, .chirp_weak = cs.by_weak, .chirp_sf = cs.sf, .chirp_hits = cs.hits,
                 .chirp_snaps = cs.snaps, .chirp_last_us = cs.last_hit_us, .last_detected_us = last_detected_us,
                 .chirp_snr_db = cs.snr_smooth_db, .chirp_delta_db = cs.delta_db, .chirp_dbfs = cs.level_dbfs,
                 .chirp_agc = cs.agc,

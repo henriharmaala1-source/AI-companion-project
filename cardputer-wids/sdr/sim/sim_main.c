@@ -45,7 +45,7 @@ typedef struct {
     double   duration_s;
     bool     inverted;
     rf_scene_t scene;
-    sim_key_t keys[8];
+    sim_key_t keys[16];
     unsigned n_keys;
     shot_t   shots[8];
     unsigned n_shots;
@@ -111,6 +111,10 @@ static void shot(scenario_t *s, double t, const char *name, shot_expect_t e)
 
 static void key(scenario_t *s, double t, uint8_t k)
 {
+    if (s->n_keys >= sizeof(s->keys) / sizeof(s->keys[0])) {
+        fprintf(stderr, "scenario has too many keys\n");
+        exit(2);
+    }
     s->keys[s->n_keys++] = (sim_key_t){ t, k };
 }
 
@@ -130,6 +134,18 @@ static void sc_bt_audio_no_afh(scenario_t *s)
     s->duration_s = 60;
     add(s, bt_audio(40.0f, 0));
     shot(s, 59, "end", SHOT_NOT_DETECTED);
+}
+
+/* The weak tier (lora_detect.h) is the false-alarm risk: chance weak
+ * snapshots must never line up into a verdict. Ten minutes of a busy band. */
+static void sc_soak_crowd(scenario_t *s)
+{
+    s->what = "Ten minutes of Wi-Fi, BLE and two Bluetooth audio links, no ELRS: never DETECTED";
+    s->duration_s = 600;
+    home_background(s);
+    add(s, bt_audio(30.0f, 6));
+    add(s, bt_audio(20.0f, 0));
+    shot(s, 599, "end", SHOT_NOT_DETECTED);
 }
 
 static void sc_elrs_500_arrives(scenario_t *s)
@@ -226,6 +242,22 @@ static void sc_elrs_weak(scenario_t *s)
     shot(s, 39, "end", SHOT_DETECTED);
 }
 
+/* At -3 dB the old 3 dB candidate gate passed almost nothing (host sweep:
+ * 0/10 at -2.5 dB); with the 1 dB gate, the weak tier and more snapshots,
+ * this must be found. */
+static void sc_elrs_250_below_noise(scenario_t *s)
+{
+    s->what = "ELRS 250 Hz 3 dB BELOW the noise: found by the 1 dB gate + weak tier";
+    s->duration_s = 40;
+    add(s, elrs_250(-3.0f, 2, 1e9));
+    s->expect_detect = true;
+    s->elrs_on_s = 2;
+    s->elrs_off_s = 1e9;
+    s->detect_within_s = 15;
+    s->detect_after_s = 2;
+    shot(s, 39, "end", SHOT_DETECTED);
+}
+
 static void sc_elrs_too_weak(scenario_t *s)
 {
     s->what = "ELRS 6 dB BELOW the noise per bin: an honest miss, never a guess";
@@ -258,16 +290,20 @@ static void sc_inverted_then_i(scenario_t *s)
 
 static void sc_keys(scenario_t *s)
 {
-    s->what = "Every key: + - t c g d; log records each change, details view works";
+    s->what = "Every key: + - t c g d ; .; log records each change, details view works";
     s->duration_s = 20;
     home_background(s);
     key(s, 3, '+');
     key(s, 4, '-');
     key(s, 5, 't');
     key(s, 6, 'c');
-    key(s, 7, 'g');
+    key(s, 7, 'g');     /* AGC -> fixed 40 */
     key(s, 8, 'd');
     key(s, 12, 'd');
+    key(s, 13, ';');    /* up arrow: 44 */
+    key(s, 13.5, '.');  /* down arrow: 40 */
+    key(s, 14, ';');    /* 44, shown on the main view at 15 s */
+    key(s, 17, 'g');    /* back to AGC */
     s->need_whys[0] = "threshold";
     s->need_whys[1] = "clear";
     s->need_whys[2] = "gain";
@@ -283,6 +319,7 @@ typedef struct {
 static const entry_t k_scenarios[] = {
     { "home_no_elrs", sc_home_no_elrs },
     { "bt_audio_no_afh", sc_bt_audio_no_afh },
+    { "soak_crowd", sc_soak_crowd },
     { "elrs_500_arrives", sc_elrs_500_arrives },
     { "elrs_f1000", sc_elrs_f1000 },
     { "elrs_250", sc_elrs_250 },
@@ -291,6 +328,7 @@ static const entry_t k_scenarios[] = {
     { "elrs_50_beside_bt", sc_elrs_50_beside_bt },
     { "elrs_approaching", sc_elrs_approaching },
     { "elrs_weak", sc_elrs_weak },
+    { "elrs_250_below_noise", sc_elrs_250_below_noise },
     { "elrs_too_weak", sc_elrs_too_weak },
     { "inverted_then_i", sc_inverted_then_i },
     { "keys", sc_keys },

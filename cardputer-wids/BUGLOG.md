@@ -8,6 +8,33 @@ Newest at the top.
 
 ---
 
+## The chirp detector threw away signals it could have found (3 dB gate)
+
+**Symptom.** Host sensitivity sweep, SF6: detected 10/10 at +5 dB in-band
+SNR, 2/10 at 0 dB. The misses printed `cand 0.0 dB`. The dechirp never ran,
+because no channel had been picked to test. Where it did run, the SF6 score
+at +5 dB was 66 against a floor of 25, which is plenty of margin.
+
+**Cause.** `lora_scan` dechirps only channels that stand out in a coarse
+spectrum: ≥ 3 dB over their neighbours and over the median. A LoRa signal at
+0 dB SNR fills its channel with as much power as the noise: (S+N)/N = 2,
+which is exactly 3 dB. So the gate, meant to save time, set the sensitivity
+limit, 5+ dB above what the dechirp itself can do.
+
+**Fix.** Gate at 1 dB. Averaged over 48 blocks, the coarse power estimate
+spreads by a few tenths of a dB, so 1 dB is still clear of noise. A false
+candidate only costs scan time, since the dechirp decides. Host sweep: the
+50 % point moved from about +1 to about −3 dB, with 0 false alarms in 2,400
+negative snapshots. 144 blocks instead of 48 bought almost nothing, so the
+scan time is unchanged. A regression check in `test_lora_detect.c` asserts
+19/20 at 0 dB.
+
+**Lesson.** When a detector has a cheap pre-filter, measure what the
+pre-filter alone lets through. Here the expensive stage had ~10 dB of margin
+that the cheap stage never gave it a chance to use.
+
+---
+
 ## First real detection: chirps work on hardware
 
 **Result** (Cardputer, ExpressLRS 250 Hz, controller about 2 m away): with

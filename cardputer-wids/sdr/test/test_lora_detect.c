@@ -156,16 +156,19 @@ int main(int argc, char **argv)
         }
     }
 
-    printf("sensitivity sweep (SF6, ELRS 250 Hz)\n");
-    for (double snr = 15.0; snr >= -10.0; snr -= 5.0) {
-        unsigned hits = 0;
+    printf("sensitivity sweep (SF6, ELRS 250 Hz; weak = at least the weak tier)\n");
+    for (double snr = 15.0; snr >= -7.5; snr -= 2.5) {
+        unsigned hits = 0, weak = 0;
         lora_result_t r;
-        for (unsigned trial = 0; trial < 10; trial++) {
-            r = run(6, trial & 1, snr, ch, -1e-3, X_NONE, 0, 1.0, 500 + trial + (uint32_t)(snr * 10 + 100) * 16, NULL);
+        for (unsigned trial = 0; trial < 20; trial++) {
+            r = run(6, trial & 1, snr, ch, -1e-3, X_NONE, 0, 1.0, 500 + trial + (uint32_t)(snr * 10 + 100) * 32, NULL);
             hits += r.detected && r.sf == 6;
+            weak += r.weak && r.sf == 6;
         }
-        printf("  SNR %+5.1f dB in 812.5 kHz: detected %2u/10   last: ", snr, hits);
+        printf("  SNR %+5.1f dB in 812.5 kHz: detected %2u/20 weak %2u/20   last: ", snr, hits, weak);
         show("", &r);
+        /* The 1 dB candidate gate: before it, 0 dB found 2 in 10. */
+        assert(snr < 0.0 || hits >= 19);
     }
 
     printf("signal strength: measured SNR vs truth (expect truth - 1.7 dB: 1.2 MHz noise band vs 812.5 kHz)\n");
@@ -196,22 +199,30 @@ int main(int argc, char **argv)
         { "all three", X_ALL, 120 },
         { "all three, overloaded", X_ALL, 600 },
     };
-    unsigned false_alarms = 0;
+    unsigned false_alarms = 0, weak_total = 0, runs = 0;
     for (unsigned k = 0; k < sizeof(k_neg) / sizeof(k_neg[0]); k++) {
-        unsigned fa = 0;
+        unsigned fa = 0, weak = 0;
         lora_result_t r;
         for (unsigned trial = 0; trial < 30; trial++) {
             r = run(0, false, 0, 0, 0, k_neg[k].x, k_neg[k].amp, 1.0, 2000 + k * 100 + trial, NULL);
             fa += r.detected;
-            if (verbose && r.detected) {
+            weak += r.weak;
+            runs++;
+            if (verbose && r.weak) {
                 show(k_neg[k].name, &r);
             }
         }
-        printf("  %-24s false alarms %u/30   last: ", k_neg[k].name, fa);
+        printf("  %-24s false alarms %u/30 weak %u/30   last: ", k_neg[k].name, fa, weak);
         show("", &r);
         false_alarms += fa;
+        weak_total += weak;
     }
     assert(false_alarms == 0);
+    /* Weak snapshots happen by chance (~1 in 300 in a longer host run) and
+     * are only trusted when 3 agree (chirp_watch.c); many more would mean the
+     * weak floor is too low for that rule. */
+    printf("  weak by chance: %u of %u snapshots\n", weak_total, runs);
+    assert(weak_total * 50 <= runs);
 
     printf("LoRa among interferers\n");
     {

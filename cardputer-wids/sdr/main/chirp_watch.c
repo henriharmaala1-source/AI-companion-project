@@ -12,30 +12,47 @@
 #include "wids_log.h"
 
 #define CAPTURE_UNITS   3u
-#define EVERY_N_PASSES  2u          /* one snapshot per this many slices */
+/* Snapshot rate: after each step, wait COST_FACTOR times what the step cost
+ * (capture + scan), so chirp work takes at most 1/(COST_FACTOR+1) of the
+ * time and the rest stays with the spectrum slices. A fast scan therefore
+ * runs every pass, a slow one every few: more snapshots, more evidence,
+ * without a fixed guess of the S3's scan time. */
+#define COST_FACTOR     2u
 #define WINDOW_US       5000000ull  /* evidence window */
-#define MIN_HITS        2u          /* positives in the window for a verdict */
+#define MIN_HITS        2u          /* full-pass snapshots in the window for a verdict */
+/* Weak snapshots (lora_detect.h) count only when this many in the window,
+ * full or weak, agree on SF and slope. A real link keeps one SF and one
+ * slope; chance weak hits (~1 in 300 host snapshots with interferers) land
+ * on any of 8 SF/slope pairs, so three that agree within 5 s is rare. */
+#define MIN_WEAK_AGREE  3u
 #define HOLD_US         10000000ull /* verdict held after the last confirming hit */
-#define HISTORY         32u         /* > snapshots in WINDOW_US (~23) */
+/* Snapshots are at least one 100 ms slice apart, so 5 s holds at most ~50.
+ * If it ever held more, the oldest would drop out of the count: fewer hits
+ * counted, never more. */
+#define HISTORY         56u
 #define DUMP_SAMPLES_PER_LINE 48u   /* 192 bytes -> 384 hex chars per log line */
 #define DUMP_RAW_WORDS  384u
 #define SNR_SMOOTH      0.3f        /* weight of each new hit in the smoothed SNR */
 
 typedef struct {
     uint32_t t_ms;                  /* ms since boot: wraps after 49 days */
-    bool     hit;
+    bool     hit;                   /* passed the full tests */
+    bool     weak;                  /* passed at least the weak tier */
+    uint8_t  sf;                    /* when weak */
+    int8_t   slope;
 } snap_t;
 
 static struct {
     unsigned rate_code;
-    unsigned pass;
+    uint64_t next_us;                /* earliest next snapshot (COST_FACTOR) */
     snap_t   hist[HISTORY];
     unsigned head, count;
     uint64_t active_until_us, last_hit_us;
     uint8_t  last_sf;
     lora_result_t last;              /* most recent scan */
     lora_result_t last_hit;          /* most recent positive scan */
-    uint32_t snaps_total, hits_total, cap_errors, scan_us_max, scan_us_last;
+    uint32_t snaps_total, hits_total, weak_total, cap_errors, scan_us_max, scan_us_last, step_us_last;
+    bool     by_weak;                /* the verdict rests on agreeing weak hits only */
     float    snr_smooth, snr_ref;         /* smoothed SNR; its value when the detection began */
     bool     have_ref;
     bool     dump_requested;
@@ -100,9 +117,11 @@ static void dump(const lora_snapshot_t *snap, float *work, const lora_result_t *
 
 /* ------------------------------------------------------------ step */
 
-static unsigned window_hits(uint64_t now_us, unsigned *snaps)
+/* Full-pass snapshots in the window; optionally also the snapshots (full
+ * or weak) that agree with `sf`/`slope`. */
+static unsigned window_hits(uint64_t now_us, unsigned *snaps, uint8_t sf, int8_t slope, unsigned *agree)
 {
-    unsigned hits = 0, n = 0;
+    unsigned hits = 0, n = 0, same = 0;
     for (unsigned k = 0; k < s.count; k++) {
         const snap_t *h = &s.hist[(s.head + HISTORY - 1 - k) % HISTORY];
         if ((uint32_t)(now_us / 1000u) - h->t_ms > WINDOW_US / 1000u) {
@@ -110,19 +129,23 @@ static unsigned window_hits(uint64_t now_us, unsigned *snaps)
         }
         n++;
         hits += h->hit;
+        same += h->weak && h->sf == sf && h->slope == slope;
     }
     if (snaps) {
         *snaps = n;
+    }
+    if (agree) {
+        *agree = same;
     }
     return hits;
 }
 
 void chirp_watch_step(uint64_t now_us)
 {
-    if (++s.pass < EVERY_N_PASSES) {
+    if (now_us < s.next_us) {
         return;
     }
-    s.pass = 0;
+    const int64_t t_step = esp_timer_get_time();
 
     size_t scratch_bytes = 0;
     float *work = sdr_engine_scratch(&scratch_bytes);
@@ -134,6 +157,7 @@ void chirp_watch_step(uint64_t now_us)
     sdr_engine_capture(s.rate_code, CAPTURE_UNITS, &cap);
     if (cap.status != 0 || cap.nseg == 0) {
         s.cap_errors++;
+        s.next_us = now_us + 100000u;   /* do not retry a failing capture every pass */
         return;
     }
     lora_snapshot_t snap;
@@ -155,14 +179,26 @@ void chirp_watch_step(uint64_t now_us)
     s.last = res;
     s.snaps_total++;
 
-    s.hist[s.head] = (snap_t){ (uint32_t)(now_us / 1000u), res.detected };
+    s.hist[s.head] = (snap_t){ (uint32_t)(now_us / 1000u), res.detected, res.weak, res.sf, res.slope };
     s.head = (s.head + 1) % HISTORY;
     s.count += s.count < HISTORY;
     if (now_us >= s.active_until_us) {
         s.have_ref = false;               /* no detection running: next one starts afresh */
     }
-    if (res.detected) {
-        s.hits_total++;
+    s.hits_total += res.detected;
+    s.weak_total += res.weak && !res.detected;
+
+    /* Does this snapshot confirm a link? A full pass always counts as
+     * evidence; a weak one only when enough agree with it. */
+    unsigned agree = 0;
+    const unsigned hits = res.weak ? window_hits(now_us, NULL, res.sf, res.slope, &agree) : 0;
+    const bool by_full = res.detected && hits >= MIN_HITS;
+    const bool by_weak = res.weak && agree >= MIN_WEAK_AGREE;
+    if (by_full || by_weak) {
+        s.by_weak = !by_full && (s.by_weak || now_us >= s.active_until_us);
+        s.active_until_us = now_us + HOLD_US;
+    }
+    if (res.detected || by_weak) {
         s.snr_smooth = s.have_ref ? s.snr_smooth + SNR_SMOOTH * (res.snr_db - s.snr_smooth) : res.snr_db;
         if (!s.have_ref) {
             s.snr_ref = res.snr_db;
@@ -171,21 +207,22 @@ void chirp_watch_step(uint64_t now_us)
         s.last_hit_us = now_us;
         s.last_sf = res.sf;
         s.last_hit = res;
-        if (window_hits(now_us, NULL) >= MIN_HITS) {
-            s.active_until_us = now_us + HOLD_US;
-        }
     }
     if (s.dump_requested) {
         s.dump_requested = false;
         dump(&snap, work, &res);
     }
+    const int64_t t_end = esp_timer_get_time();
+    s.step_us_last = (uint32_t)(t_end - t_step);
+    s.next_us = (uint64_t)t_end + COST_FACTOR * (uint64_t)s.step_us_last;
 }
 
 void chirp_watch_status(uint64_t now_us, chirp_status_t *out)
 {
     unsigned snaps = 0;
-    const unsigned hits = window_hits(now_us, &snaps);
+    const unsigned hits = window_hits(now_us, &snaps, 0, 0, NULL);
     out->active = now_us < s.active_until_us;
+    out->by_weak = out->active && s.by_weak;
     out->sf = s.last_sf;
     out->hits = (uint16_t)hits;
     out->snaps = (uint16_t)snaps;
@@ -199,31 +236,37 @@ void chirp_watch_status(uint64_t now_us, chirp_status_t *out)
 
 void chirp_watch_log(uint64_t now_us)
 {
-    unsigned snaps = 0;
-    const unsigned hits = window_hits(now_us, &snaps);
-    /* The positive scan if there was one in the window, else the latest. */
-    const lora_result_t *r = hits ? &s.last_hit : &s.last;
+    unsigned snaps = 0, agree = 0;
+    const unsigned hits = window_hits(now_us, &snaps, s.last_hit.sf, s.last_hit.slope, &agree);
+    /* The confirming scan if there was one in the window, else the latest. */
+    const bool recent = s.last_hit_us && now_us - s.last_hit_us <= WINDOW_US;
+    const lora_result_t *r = recent ? &s.last_hit : &s.last;
     char sfs[96];
     size_t w = 0;
     for (unsigned k = 0; k <= LORA_SF_MAX - LORA_SF_MIN && w < sizeof(sfs); k++) {
         const lora_sf_metric_t *m = &r->sf_metric[k];
-        const int n = snprintf(sfs + w, sizeof(sfs) - w, "%s[%.0f,%.1f,%.2f]", k ? "," : "", (double)m->score,
-                               (double)m->asym, (double)m->hit_ratio);
+        const int n = snprintf(sfs + w, sizeof(sfs) - w, "%s[%.0f,%.1f,%.2f,%.2f]", k ? "," : "",
+                               (double)m->score, (double)m->asym, (double)m->hit_ratio,
+                               (double)m->hit_ratio_weak);
         if (n < 0) {
             break;
         }
         w += (size_t)n;
     }
     wids_log_event("lora",
-                   "\"window_snaps\":%u,\"window_hits\":%u,\"active\":%s,\"sf\":%u,\"slope\":%d,"
+                   "\"window_snaps\":%u,\"window_hits\":%u,\"window_agree\":%u,\"active\":%s,"
+                   "\"tier\":\"%s\",\"weak\":%s,\"sf\":%u,\"slope\":%d,"
                    "\"freq_mhz\":%.2f,\"cand_db\":%.1f,\"snr_db\":%.1f,\"dbfs\":%.1f,\"agc\":%u,"
                    "\"snr_smooth\":%.1f,\"delta_db\":%.1f,"
                    "\"cands\":%u,\"sf5_8\":[%s],\"scan_ms\":%.1f,"
-                   "\"scan_ms_max\":%.1f,\"snaps\":%" PRIu32 ",\"hits\":%" PRIu32 ",\"cap_err\":%" PRIu32,
-                   snaps, hits, now_us < s.active_until_us ? "true" : "false", r->sf, r->slope,
+                   "\"scan_ms_max\":%.1f,\"step_ms\":%.1f,\"snaps\":%" PRIu32 ",\"hits\":%" PRIu32
+                   ",\"weak_only\":%" PRIu32 ",\"cap_err\":%" PRIu32,
+                   snaps, hits, agree, now_us < s.active_until_us ? "true" : "false",
+                   now_us >= s.active_until_us ? "none" : s.by_weak ? "weak" : "full",
+                   r->weak && !r->detected ? "true" : "false", r->sf, r->slope,
                    (double)r->freq_hz / 1e6, (double)r->cand_db, (double)r->snr_db, (double)r->level_dbfs,
                    r->agc, (double)s.snr_smooth, (double)(s.have_ref ? s.snr_smooth - s.snr_ref : 0.0f),
                    r->candidates, sfs,
-                   (double)s.scan_us_last / 1000.0, (double)s.scan_us_max / 1000.0, s.snaps_total, s.hits_total,
-                   s.cap_errors);
+                   (double)s.scan_us_last / 1000.0, (double)s.scan_us_max / 1000.0,
+                   (double)s.step_us_last / 1000.0, s.snaps_total, s.hits_total, s.weak_total, s.cap_errors);
 }
