@@ -254,6 +254,14 @@ signal levels: M0 still decides whether the idea works at all.
   LoRa RC link": other hopping 2.4 GHz LoRa links with the same settings
   (TBS Tracer and mLRS are candidates, unverified) would still pass. Add a
   simulator scenario with a fixed-channel LoRa device that must not trigger.
+- [ ] **Dechirp ELRS grid channels even when they don't stand out.** Inside
+  an overlapping Wi-Fi channel, candidate selection loses ~5 dB. Synthetic
+  test, ELRS SF6 inside continuous Wi-Fi at equal power: full scan 2/20, the
+  dechirp on the right channel 19/20. Rotate through the grid channels across
+  snapshots, alongside the bump-based candidates.
+- [ ] **Revisit the dechirp threshold** (now 25 % of a perfect chirp: the
+  limit is LoRa ~ equal to Wi-Fi in its channel). Theory allows roughly
+  −5 to −9 dB, but only after a false-alarm test on long real recordings.
 - [ ] Field test at a fixed TX power (Dynamic Power off), open line of sight:
   detection limit and SNR every ~50 m. Repeat in the car to measure its loss.
 - [ ] Check the reported SF at 500 Hz (SF5), 150 Hz (SF7) and 50 Hz (SF8).
