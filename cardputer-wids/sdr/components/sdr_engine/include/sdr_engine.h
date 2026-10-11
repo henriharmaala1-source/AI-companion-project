@@ -67,6 +67,14 @@ void sdr_engine_run_slice(const sdr_spec_cfg_t *cfg, uint32_t duration_ms, sdr_s
 /* Drain captured bytes (raw SPC1 stream). Returns bytes copied. */
 size_t sdr_engine_read(uint8_t *dst, size_t cap);
 
+/* Receiver gain, between slices only. code < 0: the radio's hardware AGC
+ * (default). code >= 0: a fixed PHY gain index (not dB), clamped to the
+ * calibrated maximum. Returns the code in force, or -1 for AGC. A fixed gain
+ * avoids AGC jumps when a strong burst arrives; upstream does the same
+ * ("GAIN MANUAL n"). */
+int sdr_engine_set_gain(int code);
+unsigned sdr_engine_gain_max(void);
+
 size_t sdr_engine_sink_capacity(void);
 unsigned sdr_engine_rate_hz(unsigned rate_code);
 bool sdr_engine_dual_core(void);

@@ -69,6 +69,13 @@ typedef struct {
     uint8_t         peak_codes[NFFT];
     uint8_t         peak_max;
     uint64_t        peak_t_us;
+    uint32_t        peak_pairs;
+    uint16_t        peak_ffts;
+    uint8_t         peak_gain, peak_flags;
+    /* gain metadata seen since the last "diag" record (AGC movement) */
+    uint8_t         gain_lo, gain_hi;
+    bool            gain_seen;
+    int             gain;          /* -1 = hardware AGC, else fixed index */
 } app_t;
 
 static app_t *s_app; /* heap, not BSS: static data must end below the RF ring */
@@ -91,6 +98,14 @@ static void on_frame(const spc1_frame_t *f, void *ctx)
     const uint32_t dur_us = (uint32_t)((uint64_t)f->pairs * 1000000ull / a->fs_hz);
     elrs_push_frame(&a->det, f->codes, f->bins, f->db_step, t_us, dur_us);
 
+    if (!a->gain_seen || f->gain < a->gain_lo) {
+        a->gain_lo = f->gain;
+    }
+    if (!a->gain_seen || f->gain > a->gain_hi) {
+        a->gain_hi = f->gain;
+    }
+    a->gain_seen = true;
+
     if (f->bins == NFFT) {
         uint8_t max = 0;
         for (unsigned i = 0; i < NFFT; i++) {
@@ -100,6 +115,10 @@ static void on_frame(const spc1_frame_t *f, void *ctx)
             memcpy(a->peak_codes, f->codes, NFFT);
             a->peak_max = max;
             a->peak_t_us = t_us;
+            a->peak_pairs = f->pairs;
+            a->peak_ffts = f->ffts;
+            a->peak_gain = f->gain;
+            a->peak_flags = f->flags;
         }
     }
 }
@@ -120,9 +139,9 @@ static void restart_detector(app_t *a, const char *why)
     elrs_init(&a->det, &a->cfg);
     wids_log_event("elrs_config",
                    "\"why\":\"%s\",\"center_khz\":%" PRIu32 ",\"fs\":%" PRIu32
-                   ",\"threshold_db\":%u,\"invert\":%s,\"band\":\"2.4GHz-only\",\"tx\":\"none\"",
+                   ",\"threshold_db\":%u,\"invert\":%s,\"gain\":%d,\"band\":\"2.4GHz-only\",\"tx\":\"none\"",
                    why, a->cfg.center_khz, a->cfg.sample_rate_hz, (unsigned)a->cfg.threshold_db,
-                   a->cfg.invert ? "true" : "false");
+                   a->cfg.invert ? "true" : "false", a->gain);
 }
 
 /* "[1,2,3]" into out; always NUL-terminated. */
@@ -152,9 +171,11 @@ static void log_diag(app_t *a)
     fmt_counts(width, sizeof(width), dg.width, ELRS_DIAG_WIDTH_BUCKETS);
     wids_log_event("diag",
                    "\"phase_from_khz\":%d,\"phase_step_khz\":%d,\"phase\":%s,\"width_bins\":%s,"
-                   "\"clipped\":%" PRIu32 ",\"inv\":%s,\"thr_db\":%u",
+                   "\"clipped\":%" PRIu32 ",\"inv\":%s,\"thr_db\":%u,\"gain\":%d,"
+                   "\"gain_meta_lo\":%u,\"gain_meta_hi\":%u",
                    -500, ELRS_DIAG_PHASE_KHZ, phase, width, dg.clipped, a->cfg.invert ? "true" : "false",
-                   (unsigned)a->cfg.threshold_db);
+                   (unsigned)a->cfg.threshold_db, a->gain, a->gain_lo, a->gain_hi);
+    a->gain_seen = false;
 }
 
 /* The strongest frame of the period, raw codes in natural FFT order (bin 0 =
@@ -168,9 +189,11 @@ static void log_peak_frame(app_t *a)
     for (unsigned part = 0; part < NFFT / FRAME_PART_BINS; part++) {
         wids_hex_encode(a->peak_codes + part * FRAME_PART_BINS, FRAME_PART_BINS, hex, sizeof(hex));
         wids_log_event("frame",
-                       "\"t_frame\":%" PRIu64 ",\"part\":%u,\"of\":%u,\"bins\":%u,\"center_mhz\":%u,"
-                       "\"fs\":%u,\"order\":\"natural\",\"db_step\":2,\"hex\":\"%s\"",
-                       a->peak_t_us, part, NFFT / FRAME_PART_BINS, NFFT, CENTER_MHZ, a->fs_hz, hex);
+                       "\"t_frame\":%" PRIu64 ",\"part\":%u,\"of\":%u,\"bins\":%u,\"pairs\":%" PRIu32
+                       ",\"ffts\":%u,\"gain_meta\":%u,\"flags\":%u,\"gain\":%d,\"order\":\"natural\","
+                       "\"hex\":\"%s\"",
+                       a->peak_t_us, part, NFFT / FRAME_PART_BINS, NFFT, a->peak_pairs, a->peak_ffts,
+                       a->peak_gain, a->peak_flags, a->gain, hex);
     }
     a->peak_max = 0;
 }
@@ -213,6 +236,7 @@ void app_main(void)
         fatal("out of memory", "detector state");
     }
     app_t *a = s_app;
+    a->gain = -1;   /* hardware AGC until 'g' is pressed */
 
     if (sdr_engine_init(CENTER_MHZ) != ESP_OK) {
         fatal("radio init failed", "check IDF pin / build");
@@ -287,6 +311,18 @@ void app_main(void)
             a->cfg.invert = !a->cfg.invert;
             restart_detector(a, "invert");
             break;
+        case 'g': { /* AGC -> fixed 10, 20 ... 60 -> AGC: find a gain that does not overload */
+            static const int k_gains[] = { -1, 10, 20, 30, 40, 50, 60 };
+            const size_t n = sizeof(k_gains) / sizeof(k_gains[0]);
+            size_t i = 0;
+            while (i < n && k_gains[i] != a->gain) {
+                i++;
+            }
+            a->gain = sdr_engine_set_gain(k_gains[(i + 1) % n]);
+            restart_detector(a, "gain");
+            next_ui = 0;
+            break;
+        }
         case 't':
             ui_alert();
             next_ui = 0;
@@ -303,7 +339,7 @@ void app_main(void)
             const ui_info_t info = {
                 .center_mhz = CENTER_MHZ, .span_mhz = a->cfg.usable_khz / 1000u,
                 .threshold_db = a->cfg.threshold_db, .invert = a->cfg.invert, .slice_ms = slice_ms,
-                .drops = drops_total, .crc_bad = a->dec.crc_bad, .uptime_us = (uint64_t)now,
+                .drops = drops_total, .crc_bad = a->dec.crc_bad, .uptime_us = (uint64_t)now, .gain = a->gain,
                 .details = details,
             };
             ui_update(&st, &info);

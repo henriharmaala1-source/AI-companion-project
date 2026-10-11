@@ -225,17 +225,19 @@ static void sc_inverted_then_i(scenario_t *s)
 
 static void sc_keys(scenario_t *s)
 {
-    s->what = "Every key: + - t c d; log records each change, details view works";
+    s->what = "Every key: + - t c g d; log records each change, details view works";
     s->duration_s = 20;
     home_background(s);
     key(s, 3, '+');
     key(s, 4, '-');
     key(s, 5, 't');
     key(s, 6, 'c');
+    key(s, 7, 'g');
     key(s, 8, 'd');
     key(s, 12, 'd');
     s->need_whys[0] = "threshold";
     s->need_whys[1] = "clear";
+    s->need_whys[2] = "gain";
     shot(s, 10, "details", SHOT_DETAILS);
     shot(s, 15, "main", SHOT_NOT_DETECTED);
 }

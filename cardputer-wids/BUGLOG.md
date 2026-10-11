@@ -8,6 +8,38 @@ Newest at the top.
 
 ---
 
+## First hardware run: ELRS on and ELRS off look the same to the detector
+
+**What the logs showed** (Cardputer, 250 Hz ELRS at ~2 m, `diag`/`frame`
+records, ~100 s with the transmitter on and ~75 s with it off):
+
+- **On-grid share is 0.5–0.6 whether ELRS is on or off.** The phase histogram
+  of burst centres is roughly flat in both captures. A healthy link (simulator)
+  piles up within ±100 kHz of the grid. So the earlier "62/62 channels, 59 %
+  on-grid" was clutter landing evenly across channels by chance, not ELRS that
+  only just failed one test.
+- **Most narrow runs are 1–2 bins wide** (~500–1000 per second), on- and off-air.
+  A real 0.8 MHz LoRa burst is 2–4 bins. These are fragments: ragged Wi-Fi
+  and noise peaks crossing the threshold.
+- **With ELRS on:** clipped runs rise ~10×, there is a huge spike at the LO
+  (86 dB at 2442.0 MHz) in almost every strongest frame, and there are several
+  flat-topped 2–3 MHz plateaus in one 2 ms frame. That looks like a receiver
+  overloaded by a transmitter 2 m away, with the hardware AGC jumping (DC steps
+  that DC tracking can't follow), not like clean bursts.
+- **88 % of FFTs are abandoned.** `ffts` ~3,750 against `abandoned` ~27,450
+  per 100 ms slice. At 80 MS/s, core 1 computes only about 6 of the 48 FFTs per
+  ring unit. The simulator assumed all of them; upstream counts the rest as
+  abandoned work.
+- **Free heap at boot is 12 KB** (largest block 7.7 KB), not the 90–100 KB I
+  estimated. It works, but there is no room to grow.
+
+**Not yet known.** Whether a fixed receiver gain (new `g` key, upstream's
+`GAIN MANUAL`) or a weaker or more distant transmitter gives clean bursts on
+the grid. The detector is unchanged until that data exists. The simulator needs
+FFT abandonment and AGC behaviour before its passes mean much for hardware.
+
+---
+
 ## Found by the simulator: the RAM sink starved the receiver (listening 17 %)
 
 **Symptom.** The first run of the host simulator (`sdr/sim/`) failed every

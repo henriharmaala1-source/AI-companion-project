@@ -288,6 +288,10 @@ size_t sdr_engine_read(uint8_t *dst, size_t cap)
     return n;
 }
 
+/* Gain is not modelled: the scene's levels are what the detector sees. */
+int sdr_engine_set_gain(int code) { return code < 0 ? -1 : code > 82 ? 82 : code; }
+unsigned sdr_engine_gain_max(void) { return 82; }
+
 size_t sdr_engine_sink_capacity(void) { return sdr_sink_capacity(); }
 
 /* ring_capture_rate_hz(), S3 branch. */

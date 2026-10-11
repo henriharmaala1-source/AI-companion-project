@@ -87,13 +87,15 @@ static unsigned gain_max(void)
     unsigned maximum = (REG_READ(BURST_GAIN_REG) >> 8) & 127u;
     return maximum <= 82u ? maximum : 0u; /* never expose uncalibrated slots */
 }
+static bool     s_gain_manual;      /* false: hardware AGC */
+static unsigned s_gain_code = 40;   /* upstream's default index */
+
 static void gain_apply(void)
 {
-    unsigned code = 40;
-    if (code > gain_max()) {
-        code = gain_max();
+    if (s_gain_code > gain_max()) {
+        s_gain_code = gain_max();
     }
-    force_rx_gain(0 /* hardware AGC */, code, 0);
+    force_rx_gain(s_gain_manual ? 1u : 0u, s_gain_code, 0);
 }
 
 /* ---- receive path (upstream prepare_rx, default rx_prep = 3) ------------ */
@@ -171,6 +173,21 @@ void sdr_engine_run_slice(const sdr_spec_cfg_t *cfg, uint32_t duration_ms, sdr_s
     out->elapsed_us = r.elapsed_us;
     out->sink_used = sdr_sink_used();
 }
+
+/* Upstream gain_reconfigure(): a forced index alone can leave continuous
+ * capture on stale RX state, so redo the whole receive setup. */
+int sdr_engine_set_gain(int code)
+{
+    s_gain_manual = code >= 0;
+    if (s_gain_manual) {
+        s_gain_code = (unsigned)code;
+    }
+    s_rx_ready = false;
+    prepare_rx();
+    return s_gain_manual ? (int)s_gain_code : -1;
+}
+
+unsigned sdr_engine_gain_max(void) { return gain_max(); }
 
 size_t sdr_engine_read(uint8_t *dst, size_t cap) { return sdr_sink_read(dst, cap); }
 size_t sdr_engine_sink_capacity(void) { return sdr_sink_capacity(); }

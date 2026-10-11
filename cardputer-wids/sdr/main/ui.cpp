@@ -50,7 +50,7 @@ static void footer(void)
     display.setCursor(2, 112);
     display.print("2.4GHz only. Not detected != all clear");
     display.setCursor(2, 124);
-    display.print("[d]etails [c]lear [+/-]thr [i]nv [t]est");
+    display.print("[d]et [c]lr [+-]thr [i]nv [g]ain [t]est");
 }
 
 static void clear_all(void)
@@ -193,7 +193,13 @@ static void draw_details(const elrs_status_t *st, const ui_info_t *info)
              info->threshold_db, info->invert ? " INV" : "");
     display.print(line);
     display.setCursor(2, 98);
-    snprintf(line, sizeof(line), "slice %ums drops %u crc %u", (unsigned)info->slice_ms,
+    char gain[12];   /* "AGC" or any int */
+    if (info->gain < 0) {
+        snprintf(gain, sizeof(gain), "AGC");
+    } else {
+        snprintf(gain, sizeof(gain), "%d", info->gain);
+    }
+    snprintf(line, sizeof(line), "gain %s slice %ums drops %u crc %u", gain, (unsigned)info->slice_ms,
              (unsigned)info->drops, (unsigned)info->crc_bad);
     display.print(line);
 }

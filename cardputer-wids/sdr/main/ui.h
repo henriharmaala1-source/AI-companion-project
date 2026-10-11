@@ -20,6 +20,7 @@ typedef struct {
     uint32_t crc_bad;      /* frames rejected by the decoder, cumulative */
     uint64_t uptime_us;
     bool     details;      /* false: big DETECTED / NOT DETECTED view */
+    int      gain;         /* -1 = hardware AGC, else fixed PHY gain index */
 } ui_info_t;
 
 void ui_init(void);
