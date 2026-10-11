@@ -43,6 +43,7 @@ typedef struct {
     uint32_t seed;          /* stands in for the binding phrase */
     unsigned sf;            /* LoRa spreading factor, 0 = FLRC (no chirp) */
     bool     invert_iq;     /* ExpressLRS invertIQ = UID[5] & 1 */
+    float    ramp_db_per_s; /* level change over time: a transmitter approaching (+) or leaving (-) */
     /* RF_WIFI */
     unsigned wifi_channel;  /* 1..13 */
     float    duty;          /* fraction of time carrying traffic, 0..1 */
@@ -61,6 +62,13 @@ typedef struct {
     unsigned ffts;          /* FFTs merged into the window (max-hold) */
     bool     inverted;      /* the hardware delivers a mirrored spectrum */
 } rf_view_t;
+
+/* Level at time t_us (on_s is where the ramp starts). */
+static inline float rf_level_at(const rf_emitter_t *e, double t_us)
+{
+    const double since = t_us / 1e6 - e->on_s;
+    return e->level_db + (float)(since > 0 ? since : 0) * e->ramp_db_per_s;
+}
 
 void rf_scene_init(rf_scene_t *s);
 /* Returns the index of the new emitter, or -1 when the scene is full. */

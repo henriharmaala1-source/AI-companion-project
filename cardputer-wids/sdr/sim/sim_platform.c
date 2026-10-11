@@ -115,6 +115,13 @@ static void parse_line(const char *line)
         if (field(line, "frames", val, sizeof(val))) {
             s_log.frames_last = (uint32_t)strtoul(val, NULL, 10);
         }
+    } else if (strcmp(ev, "lora") == 0) {
+        if (field(line, "delta_db", val, sizeof(val))) {
+            s_log.lora_delta_db = strtof(val, NULL);
+        }
+        if (field(line, "snr_smooth", val, sizeof(val))) {
+            s_log.lora_snr_db = strtof(val, NULL);
+        }
     } else if (strcmp(ev, "boot") == 0) {
         s_log.boots++;
     } else if (strcmp(ev, "error") == 0) {

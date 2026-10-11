@@ -326,13 +326,14 @@ static void synth_elrs(synth_t *sy, const rf_scene_t *sc, unsigned idx, double t
         }
         const unsigned ch = sc->elrs_seq[idx][((uint64_t)k / e->packets_per_hop) % 240u];
         const double f = 2400.4e6 + ch * 1e6 - center;
+        const float level = rf_level_at(e, ps);
         if (e->sf == 0) {
-            synth_gfsk(sy, f, amp_for(e->level_db, 600e3));
+            synth_gfsk(sy, f, amp_for(level, 600e3));
             return;
         }
         const double sym_us = (double)(1u << e->sf) / 812500.0 * 1e6;
         int payload = (int)(air / sym_us - 16.25);
-        synth_lora(sy, e->sf, e->invert_iq, f, amp_for(e->level_db, 812500.0), (ps - t0) / 1e6,
+        synth_lora(sy, e->sf, e->invert_iq, f, amp_for(level, 812500.0), (ps - t0) / 1e6,
                    (unsigned)(payload < 4 ? 4 : payload));
     }
 }

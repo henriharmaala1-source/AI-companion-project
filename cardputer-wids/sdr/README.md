@@ -46,8 +46,11 @@ snapshot (`bb` baseband + `raw` words, to check the dechirp offline).
 
 ## Screen
 
-The main view is one big answer: **ELRS DETECTED** (red, with a flash) or
-**NOT DETECTED** (green). The line under it says which kind of "not
+The main view is only the answer: **ELRS DETECTED** (red, with a flash) or
+**NOT DETECTED** (green), plus up to three lines. With a chirp detection
+these are the SF and ELRS rate, the raw level in dBFS with its gain index,
+and the SNR with its change since the detection began (+ = closer). The key
+reference is in the details view. The line under it says which kind of "not
 detected": no hopping at all, or a hopping signal that isn't on the ELRS
 grid, such as Bluetooth. "Not detected" never means "all clear". `d` toggles a
 details view with the channel strip and detector numbers.

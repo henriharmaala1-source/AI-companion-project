@@ -174,7 +174,7 @@ static void elrs_packet(render_t *r, const rf_emitter_t *e, const uint8_t *seq, 
 {
     const unsigned hop = (unsigned)((k / e->packets_per_hop) % 240u);
     const double f = 2400400.0 + 1000.0 * seq[hop];
-    add_tx(r, f, e->bw_khz, e->level_db + jitter_db(e->seed, k));
+    add_tx(r, f, e->bw_khz, rf_level_at(e, e->on_s * 1e6 + (double)k * e->packet_ms * 1000.0) + jitter_db(e->seed, k));
 }
 
 /* BT Classic, audio streaming: per 6-slot cycle (3.75 ms) one DH5 packet

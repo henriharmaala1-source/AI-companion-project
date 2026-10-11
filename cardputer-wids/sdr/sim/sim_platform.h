@@ -27,6 +27,8 @@ typedef struct {
     unsigned lines, boots, errors, sdr_errors;
     uint32_t crc_bad, frames_last;     /* from the last sdr_stats line */
     bool     bad_json;                 /* a line that does not look like NDJSON */
+    float    lora_delta_db;            /* from the last "lora" line */
+    float    lora_snr_db;
 } sim_log_t;
 
 /* Prepare a run: console goes to `log_path`, keys fire at their times, the

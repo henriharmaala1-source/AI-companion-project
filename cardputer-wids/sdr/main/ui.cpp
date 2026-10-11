@@ -36,28 +36,18 @@ static constexpr uint16_t COL_ALERT = 0xF800;
 static constexpr uint16_t COL_BAR = 0x05FF;
 static constexpr uint16_t COL_HIDDEN = 0x2104;
 
-static constexpr int BANNER_Y = 14;
-static constexpr int BANNER_H = 62;
+/* Main view: the banner, then up to three short lines. Nothing else. */
+static constexpr int BANNER_Y = 6;
+static constexpr int BANNER_H = 70;
+static constexpr int LINES_Y = 82;      /* text area below the banner */
 
 /* What is currently on the panel, so unchanged parts are not redrawn. */
 static int s_drawn_state = -1;
 static bool s_drawn_details = false;
 
-static void footer(void)
-{
-    display.fillRect(0, 112, display.width(), 23, COL_BG);
-    display.setTextSize(1);
-    display.setTextColor(COL_DIM, COL_BG);
-    display.setCursor(2, 112);
-    display.print("2.4GHz only. Not detected != all clear");
-    display.setCursor(2, 124);
-    display.print("[d]et [c]lr [+-]thr [i]nv [g]ain [t]est");
-}
-
 static void clear_all(void)
 {
     display.fillScreen(COL_BG);
-    footer();
     s_drawn_state = -1;
 }
 
@@ -71,7 +61,7 @@ extern "C" void ui_init(void)
 
 extern "C" void ui_message(const char *line1, const char *line2)
 {
-    display.fillRect(0, BANNER_Y, display.width(), 96, COL_BG);
+    display.fillScreen(COL_BG);
     display.setTextSize(1);
     display.setTextColor(COL_WARN, COL_BG);
     display.setCursor(2, 50);
@@ -102,9 +92,9 @@ static void draw_banner(elrs_state_t state)
     }
     display.setTextColor(fg, bg);
     display.setTextSize(2);
-    centred("ELRS", BANNER_Y + 8);
+    centred("ELRS", BANNER_Y + 10);
     display.setTextSize(3);
-    centred(detected ? "DETECTED" : "NOT DETECTED", BANNER_Y + 30);
+    centred(detected ? "DETECTED" : "NOT DETECTED", BANNER_Y + 36);
     display.setTextSize(1);
 }
 
@@ -112,7 +102,7 @@ static void draw_banner(elrs_state_t state)
 static void draw_reason(const elrs_status_t *st, const ui_info_t *info)
 {
     char line[64];
-    display.fillRect(0, 80, display.width(), 30, COL_BG);
+    display.fillRect(0, LINES_Y, display.width(), display.height() - LINES_Y, COL_BG);
     display.setTextSize(1);
 
     switch (st->state) {
@@ -134,16 +124,24 @@ static void draw_reason(const elrs_status_t *st, const ui_info_t *info)
         snprintf(line, sizeof(line), "no hopping signal seen on 2.4 GHz");
         break;
     }
-    centred(line, 82);
+    centred(line, LINES_Y + 6);
 
     /* "When was it last DETECTED", from the verdict. Not the last on-grid
      * burst: a single noise spike can land on the grid, and the simulator
      * showed that line claiming ELRS seconds ago long after the link stopped. */
     display.setTextColor(COL_DIM, COL_BG);
     if (st->state == ELRS_LIKELY && info->chirp_active) {
-        snprintf(line, sizeof(line), "SNR %.0f dB  chirps %u/%u in 5 s", (double)info->chirp_snr_db, info->chirp_hits,
-                 info->chirp_snaps);
-    } else if (st->state == ELRS_LIKELY) {
+        /* Raw level (only comparable at the same gain index), then the
+         * AGC-proof SNR and how it moved since the detection began. */
+        snprintf(line, sizeof(line), "raw %.1f dBFS (gain %u)", (double)info->chirp_dbfs, info->chirp_agc);
+        centred(line, LINES_Y + 22);
+        display.setTextColor(info->chirp_delta_db >= 0.0f ? COL_WARN : COL_FG, COL_BG);
+        snprintf(line, sizeof(line), "SNR %.0f dB  %+.1f dB since first", (double)info->chirp_snr_db,
+                 (double)info->chirp_delta_db);
+        centred(line, LINES_Y + 38);
+        return;
+    }
+    if (st->state == ELRS_LIKELY) {
         snprintf(line, sizeof(line), "dwell ~%.0f ms, flatness %.2f", (double)st->dwell_ms,
                  (double)st->uniformity_cv);
     } else if (info->last_detected_us > 0 && info->uptime_us >= info->last_detected_us) {
@@ -156,13 +154,13 @@ static void draw_reason(const elrs_status_t *st, const ui_info_t *info)
     } else {
         snprintf(line, sizeof(line), "listening %u MHz +-%u", info->center_mhz, info->span_mhz / 2);
     }
-    centred(line, 96);
+    centred(line, LINES_Y + 24);
 }
 
 static void draw_details(const elrs_status_t *st, const ui_info_t *info)
 {
     char line[64];
-    display.fillRect(0, 0, display.width(), 112, COL_BG);
+    display.fillScreen(COL_BG);
     display.setTextSize(1);
 
     display.setTextColor(st->state == ELRS_LIKELY ? COL_ALERT : COL_OK, COL_BG);
@@ -211,6 +209,11 @@ static void draw_details(const elrs_status_t *st, const ui_info_t *info)
     snprintf(line, sizeof(line), "gain %s slice %ums drops %u crc %u", gain, (unsigned)info->slice_ms,
              (unsigned)info->drops, (unsigned)info->crc_bad);
     display.print(line);
+    /* Key reference lives here, off the main view. */
+    display.setCursor(2, 112);
+    display.print("[d]etails [c]lear [+/-]threshold");
+    display.setCursor(2, 124);
+    display.print("[i]nvert [g]ain [r]aw dump [t]est");
 }
 
 extern "C" void ui_update(const elrs_status_t *st, const ui_info_t *info)
@@ -218,7 +221,7 @@ extern "C" void ui_update(const elrs_status_t *st, const ui_info_t *info)
     display.startWrite();
 
     if (info->details != s_drawn_details) {
-        display.fillRect(0, 0, display.width(), 112, COL_BG);
+        display.fillScreen(COL_BG);
         s_drawn_details = info->details;
         s_drawn_state = -1;
     }
@@ -226,12 +229,6 @@ extern "C" void ui_update(const elrs_status_t *st, const ui_info_t *info)
     if (info->details) {
         draw_details(st, info);
     } else {
-        /* header */
-        display.fillRect(0, 0, display.width(), 12, COL_BG);
-        display.setTextSize(1);
-        display.setTextColor(COL_DIM, COL_BG);
-        display.setCursor(2, 2);
-        display.print("ELRS WATCH  receive only");
         /* The banner only changes when the verdict does: no flicker. */
         if ((int)st->state != s_drawn_state) {
             draw_banner(st->state);

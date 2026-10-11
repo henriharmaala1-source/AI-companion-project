@@ -56,6 +56,7 @@ typedef struct {
     double   detect_after_s;     /* no ELRS-LIKELY before this time */
     double   release_within_s;   /* after elrs_off_s */
     const char *need_whys[4];
+    float    min_delta_db;       /* > 0: the "since first" SNR change must reach this */
 } scenario_t;
 
 static rf_emitter_t elrs(float level, double on, double off, float packet_ms, float air_ms,
@@ -195,6 +196,23 @@ static void sc_elrs_50_beside_bt(scenario_t *s)
     shot(s, 39, "end", SHOT_DETECTED);
 }
 
+static void sc_elrs_approaching(scenario_t *s)
+{
+    s->what = "ELRS 250 Hz getting closer (+0.5 dB/s): SNR and 'since first' must rise";
+    s->duration_s = 40;
+    rf_emitter_t e = elrs_250(10.0f, 2, 1e9);
+    e.ramp_db_per_s = 0.5f;
+    add(s, e);
+    s->expect_detect = true;
+    s->elrs_on_s = 2;
+    s->elrs_off_s = 1e9;
+    s->detect_within_s = 12;
+    s->detect_after_s = 2;
+    s->min_delta_db = 8.0f;   /* ~18 dB of ramp minus detection delay and smoothing */
+    shot(s, 15, "mid", SHOT_DETECTED);
+    shot(s, 39, "end", SHOT_DETECTED);
+}
+
 static void sc_elrs_weak(scenario_t *s)
 {
     s->what = "ELRS 6 dB above noise: under the grid detector's 10 dB, found by its chirps";
@@ -271,6 +289,7 @@ static const entry_t k_scenarios[] = {
     { "elrs_50", sc_elrs_50 },
     { "elrs_in_crowd", sc_elrs_in_crowd },
     { "elrs_50_beside_bt", sc_elrs_50_beside_bt },
+    { "elrs_approaching", sc_elrs_approaching },
     { "elrs_weak", sc_elrs_weak },
     { "elrs_too_weak", sc_elrs_too_weak },
     { "inverted_then_i", sc_inverted_then_i },
@@ -280,14 +299,16 @@ static const entry_t k_scenarios[] = {
 
 /* ------------------------------------------------------------ the screen */
 
-/* What the main view is showing, read from two pixels ui.cpp always paints:
- * the red banner fill, or the corner of the green "NOT DETECTED" outline. */
+/* What the main view is showing, read from pixels ui.cpp always paints: the
+ * red banner fill (y 6..75), or three corners of the green "NOT DETECTED"
+ * outline (x 4..235, y 8..73), which no text in the details view can mimic. */
 static shot_expect_t screen_shows(void)
 {
-    if (sim_display_pixel(2, 16) == 0xF800) {
+    if (sim_display_pixel(2, 16) == 0xF800 && sim_display_pixel(237, 70) == 0xF800) {
         return SHOT_DETECTED;
     }
-    if (sim_display_pixel(4, 16) == 0x07E0) {
+    if (sim_display_pixel(4, 8) == 0x07E0 && sim_display_pixel(235, 8) == 0x07E0 &&
+        sim_display_pixel(4, 73) == 0x07E0) {
         return SHOT_NOT_DETECTED;
     }
     return SHOT_DETAILS;
@@ -478,6 +499,10 @@ static int run_one(const entry_t *en, const char *outdir)
     check_log_health(log);
     check_verdicts(&sc, log);
     check_screen(&sc);
+    if (sc.min_delta_db > 0.0f) {
+        report(log->lora_delta_db >= sc.min_delta_db, "SNR rose by %.1f dB since first hit (need %.0f), now %.1f dB",
+               (double)log->lora_delta_db, (double)sc.min_delta_db, (double)log->lora_snr_db);
+    }
     for (unsigned i = 0; i < 4 && sc.need_whys[i]; i++) {
         report(has_why(log, sc.need_whys[i]), "log records a '%s' config change", sc.need_whys[i]);
     }

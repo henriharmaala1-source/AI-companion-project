@@ -23,6 +23,9 @@ typedef struct {
     float    snr_db;          /* last hit: dB over the noise (proximity, AGC-proof) */
     float    level_dbfs;      /* last hit: dB re ADC full scale (needs the same AGC index) */
     uint8_t  agc;             /* last hit: receiver gain index */
+    float    snr_smooth_db;   /* SNR averaged over recent hits (less jitter) */
+    float    delta_db;        /* snr_smooth_db minus the SNR when this detection began:
+                               * + = getting closer, - = moving away */
 } chirp_status_t;
 
 void chirp_watch_init(unsigned rate_code);

@@ -25,7 +25,10 @@ typedef struct {
     uint8_t  chirp_sf;     /* SF of the last LoRa hit, 0 = none */
     uint16_t chirp_hits, chirp_snaps; /* in the evidence window */
     uint64_t chirp_last_us;
-    float    chirp_snr_db;    /* last hit's SNR: closer transmitter = higher */
+    float    chirp_snr_db;    /* smoothed SNR of recent hits: closer transmitter = higher */
+    float    chirp_delta_db;  /* SNR change since this detection began */
+    float    chirp_dbfs;      /* last hit, raw level re ADC full scale */
+    uint8_t  chirp_agc;       /* gain index for that level */
     uint64_t last_detected_us;  /* last time the screen said DETECTED, 0 = never */
 } ui_info_t;
 
