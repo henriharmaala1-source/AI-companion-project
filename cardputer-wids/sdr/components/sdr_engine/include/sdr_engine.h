@@ -92,6 +92,37 @@ size_t sdr_engine_read(uint8_t *dst, size_t cap);
 int sdr_engine_set_gain(int code);
 unsigned sdr_engine_gain_max(void);
 
+/* Receiver analog low-pass, applied around each run as upstream does
+ * (rx_filter_apply/restore, "BANDWIDTH" / "LPF AUTO"). code < 0: the
+ * PHY-calibrated setting (default); 0..63: a capacitor code, 0 = widest.
+ * At 80 MS/s most of the spectrum may lie outside the default filter
+ * (esp-sdr docs/rx-controls.md); whether wider helps is a hardware test. */
+void sdr_engine_set_rx_filter(int code);
+/* Code in force during the last run (read back from the register), -1
+ * before the first run. */
+int sdr_engine_rx_filter_code(void);
+
+/* Approximate two-sided -3 dB width in MHz for an S3 capacitor code,
+ * interpolated on upstream's measured curve (esp-sdr main/common/
+ * rx_bandwidth.h @ e74f2a4: 2300 MHz, gain 75, 80 MS/s). 0 if unknown. */
+static inline unsigned sdr_engine_rx_filter_mhz(int code)
+{
+    static const unsigned char pts[][2] = {
+        { 0, 69 }, { 4, 51 }, { 8, 45 }, { 16, 33 }, { 24, 25 }, { 32, 21 }, { 48, 16 }, { 60, 13 },
+    };
+    const unsigned n = sizeof(pts) / sizeof(pts[0]);
+    if (code < 0 || code > 63) {
+        return 0;
+    }
+    for (unsigned k = 0; k + 1 < n; k++) {
+        if ((unsigned)code <= pts[k + 1][0]) {
+            const unsigned c0 = pts[k][0], c1 = pts[k + 1][0], m0 = pts[k][1], m1 = pts[k + 1][1];
+            return m0 - (m0 - m1) * ((unsigned)code - c0) / (c1 - c0);
+        }
+    }
+    return pts[n - 1][1];
+}
+
 size_t sdr_engine_sink_capacity(void);
 unsigned sdr_engine_rate_hz(unsigned rate_code);
 bool sdr_engine_dual_core(void);

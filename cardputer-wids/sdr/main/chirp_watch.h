@@ -27,6 +27,7 @@ typedef struct {
     float    snr_smooth_db;   /* SNR averaged over recent hits (less jitter) */
     float    delta_db;        /* snr_smooth_db minus the SNR when this detection began:
                                * + = getting closer, - = moving away */
+    float    clip_frac;       /* last snapshot: samples at the ADC rail (0..1) */
 } chirp_status_t;
 
 void chirp_watch_init(unsigned rate_code);
@@ -37,6 +38,8 @@ void chirp_watch_status(uint64_t now_us, chirp_status_t *out);
 void chirp_watch_log(uint64_t now_us);
 /* Log the next snapshot's baseband and some raw words ("bb", "raw"). */
 void chirp_watch_request_dump(void);
+/* Forget the learned noise floor: call when gain or filter change. */
+void chirp_watch_reset_floor(void);
 
 /* ExpressLRS 2.4 GHz rate for a LoRa SF (src/src/common.cpp). */
 const char *chirp_elrs_rate(uint8_t sf);

@@ -50,6 +50,8 @@ extern void rom_set_rxclk_en(unsigned);
 extern void set_chanfreq(unsigned, unsigned);
 extern void set_rf_freq_offset(unsigned, unsigned, int);
 extern void force_rx_gain(unsigned, unsigned, unsigned);
+extern unsigned rom_chip_i2c_readReg(unsigned, unsigned, unsigned);
+extern void rom_chip_i2c_writeReg(unsigned, unsigned, unsigned, unsigned);
 
 /* Required by the stock RF test archive; no shell is exposed. (upstream) */
 int cmd_parse(char *cmd, char *name, int *argc, char **argv)
@@ -96,6 +98,33 @@ static void gain_apply(void)
         s_gain_code = gain_max();
     }
     force_rx_gain(s_gain_manual ? 1u : 0u, s_gain_code, 0);
+}
+
+/* ---- analog filter (upstream rx_filter_apply / rx_filter_restore) -------
+ * BBTOP block 0x67, registers 4 and 5, low 6 bits. Applied only around a
+ * run and restored after it, because calibration reads these registers. */
+static int      s_rx_filter = -1;      /* -1: PHY-calibrated setting */
+static unsigned s_rx_filter_saved[2];
+static int      s_rx_filter_seen = -1; /* code in force during the last run */
+
+static void rx_filter_apply(void)
+{
+    for (unsigned j = 0; j < 2; j++) {
+        s_rx_filter_saved[j] = rom_chip_i2c_readReg(0x67, 0, 4 + j);
+        if (s_rx_filter >= 0) {
+            rom_chip_i2c_writeReg(0x67, 0, 4 + j, (s_rx_filter_saved[j] & ~63u) | (unsigned)s_rx_filter);
+        }
+    }
+    s_rx_filter_seen = s_rx_filter >= 0 ? s_rx_filter : (int)(s_rx_filter_saved[0] & 63u);
+}
+
+static void rx_filter_restore(void)
+{
+    if (s_rx_filter >= 0) {
+        for (unsigned j = 0; j < 2; j++) {
+            rom_chip_i2c_writeReg(0x67, 0, 4 + j, s_rx_filter_saved[j]);
+        }
+    }
 }
 
 /* ---- receive path (upstream prepare_rx, default rx_prep = 3) ------------ */
@@ -160,7 +189,9 @@ void sdr_engine_run_slice(const sdr_spec_cfg_t *cfg, uint32_t duration_ms, sdr_s
     ring_result_t r;
     prepare_rx();
     sdr_sink_pace(SDR_FRAME_BYTES(cfg->nfft), cfg->frame_us);
+    rx_filter_apply();
     ring_capture_run(&c, &r);
+    rx_filter_restore();
 
     memset(out, 0, sizeof(*out));
     out->status = r.status;
@@ -187,7 +218,9 @@ void sdr_engine_capture(unsigned rate_code, unsigned units, sdr_capture_t *out)
 
     ring_result_t r;
     prepare_rx();
+    rx_filter_apply();
     ring_capture_run(&c, &r);
+    rx_filter_restore();
     out->status = r.status;
     out->fs_hz = ring_capture_rate_hz(rate_code);
     if (r.status != 0) {
@@ -226,6 +259,9 @@ int sdr_engine_set_gain(int code)
 }
 
 unsigned sdr_engine_gain_max(void) { return gain_max(); }
+
+void sdr_engine_set_rx_filter(int code) { s_rx_filter = code < 0 ? -1 : code > 63 ? 63 : code; }
+int sdr_engine_rx_filter_code(void) { return s_rx_filter_seen; }
 
 size_t sdr_engine_read(uint8_t *dst, size_t cap) { return sdr_sink_read(dst, cap); }
 size_t sdr_engine_sink_capacity(void) { return sdr_sink_capacity(); }

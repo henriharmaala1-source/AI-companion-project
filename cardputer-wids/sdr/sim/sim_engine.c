@@ -19,8 +19,17 @@
  *   - the next run starts by resetting the queue (:1340), discarding anything
  *     still in it.
  *
- * What it does not model: FFT work being abandoned when core 1 falls behind,
- * the exact poll cadence, and the cost of a recalibration in prepare_rx().
+ *   - when core 1 falls behind, a unit's FFT work is abandoned (:1176-1179):
+ *     the unit adds pairs but no FFT. A frame is closed mid-run only if it
+ *     holds an FFT (:1191), but the final one goes out whenever it holds a
+ *     unit (:1287), so a final stretch of abandoned units is sent as an
+ *     EMPTY frame from the zeroed accumulator (:1046). Upstream stopped
+ *     sending those in 3b030e0 (after our pin). Off unless a scenario sets
+ *     sim_engine_set_abandon(): the real rate depends on core 1's load.
+ *
+ * What it does not model: the exact poll cadence, which units core 1 drops
+ * (here: independently at random), and the cost of a recalibration in
+ * prepare_rx().
  */
 #include "sim_engine.h"
 
@@ -52,6 +61,8 @@ static struct {
     bool     inverted;
     unsigned center_mhz;
     bool     charge_processing;
+    float    abandon;           /* fraction of units whose FFTs are abandoned */
+    uint32_t rng;
     /* upstream's output queue */
     uint8_t  txq[TXQ_SIZE];
     uint32_t head, tail;
@@ -159,6 +170,7 @@ static void close_frame(unsigned bins, unsigned fs_hz)
     const double frame_us = (double)E.pairs * 1e6 / fs_hz;
     if (txq_push(o, len + 4)) {
         E.frames++;
+        E.stats.empty_frames += E.ffts == 0;
         E.dropped = false;
         E.stats.frames++;
         E.stats.frame_us_sum += frame_us;
@@ -177,16 +189,17 @@ static void close_frame(unsigned bins, unsigned fs_hz)
     E.pairs = 0;
 }
 
+/* Upstream accumulates into a zeroed buffer (:1046), so a frame of only
+ * abandoned units (ffts = 0) is all zeros. */
 static void merge_unit(const uint8_t *codes, unsigned bins, unsigned ffts, uint64_t index)
 {
     if (E.units == 0) {
         E.index = index;
-        memcpy(E.acc, codes, bins);
-    } else {
-        for (unsigned b = 0; b < bins; b++) {
-            if (codes[b] > E.acc[b]) {
-                E.acc[b] = codes[b];    /* max-hold across units */
-            }
+        memset(E.acc, 0, bins);
+    }
+    for (unsigned b = 0; ffts > 0 && b < bins; b++) {
+        if (codes[b] > E.acc[b]) {
+            E.acc[b] = codes[b];    /* max-hold across units */
         }
     }
     E.units++;
@@ -203,6 +216,21 @@ void sim_engine_attach(const rf_scene_t *scene, bool inverted)
 }
 
 const sim_engine_stats_t *sim_engine_stats(void) { return &E.stats; }
+
+void sim_engine_set_abandon(float fraction)
+{
+    E.abandon = fraction;
+    E.rng = 0x9e3779b9u;
+}
+
+static bool unit_abandoned(void)
+{
+    if (E.abandon <= 0.0f) {
+        return false;
+    }
+    E.rng = E.rng * 1664525u + 1013904223u;   /* LCG: reproducible runs */
+    return (float)(E.rng >> 8) / (float)(1u << 24) < E.abandon;
+}
 
 esp_err_t sdr_engine_init(unsigned center_mhz)
 {
@@ -237,6 +265,7 @@ void sdr_engine_run_slice(const sdr_spec_cfg_t *cfg, uint32_t duration_ms, sdr_s
     const double end_us = t_start + duration_ms * 1000.0;
     uint8_t codes[2048];
     uint64_t index = 0;
+    uint32_t done_ffts = 0, abandoned = 0;
 
     for (double t0 = t_start; t0 < end_us; t0 += unit_us) {
         const double t1 = t0 + unit_us;
@@ -247,16 +276,21 @@ void sdr_engine_run_slice(const sdr_spec_cfg_t *cfg, uint32_t duration_ms, sdr_s
         }
         advance_to(t1);
         rf_scene_render(E.scene, &view, t0, t1, codes);
-        merge_unit(codes, bins, view.ffts, index);
+        const unsigned ffts = unit_abandoned() ? 0u : view.ffts;
+        merge_unit(codes, bins, ffts, index);
+        done_ffts += ffts;
+        abandoned += view.ffts - ffts;
         index += UNIT_PAIRS;
-        /* :626 / :1191 - emit as soon as the previous output has drained. */
-        if (E.head == E.tail) {
+        /* :626 / :1191 - emit as soon as the previous output has drained,
+         * and only a frame that holds an FFT. */
+        if (E.head == E.tail && E.ffts > 0) {
             close_frame(bins, fs);
         }
     }
     const double elapsed = (double)sim_now_us() - t_start;
 
-    /* :1287 - the open frame goes out at the end of the run regardless. */
+    /* :1287 - the open frame goes out at the end of the run regardless,
+     * even with no FFT in it (an empty frame; see the header). */
     if (E.units > 0) {
         close_frame(bins, fs);
     }
@@ -276,11 +310,18 @@ void sdr_engine_run_slice(const sdr_spec_cfg_t *cfg, uint32_t duration_ms, sdr_s
 
     out->frames = E.frames;
     out->drops = E.drops;
-    out->ffts = (uint32_t)(index / bins);
+    out->ffts = done_ffts;
+    out->abandoned = abandoned;
     out->pairs = index;
     out->elapsed_us = (uint64_t)elapsed;
     out->sink_used = sdr_sink_used();
 }
+
+/* The simulated receiver has no analog filter model: the setting is only
+ * remembered so the app's key, log and screen paths run. */
+static int s_rx_filter = -1;
+void sdr_engine_set_rx_filter(int code) { s_rx_filter = code < 0 ? -1 : code > 63 ? 63 : code; }
+int sdr_engine_rx_filter_code(void) { return s_rx_filter; }
 
 size_t sdr_engine_read(uint8_t *dst, size_t cap)
 {

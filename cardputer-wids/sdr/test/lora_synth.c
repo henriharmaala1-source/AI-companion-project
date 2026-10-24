@@ -153,6 +153,46 @@ void synth_noise(synth_t *s, double sigma)
     }
 }
 
+/* The receiver's analog low-pass, applied to everything added so far, then
+ * the ADC's own white noise. A 127-tap Hamming windowed-sinc: a model of a
+ * smooth roll-off, not of the S3's actual curve. */
+void synth_analog_filter(synth_t *s, double bw_hz, double adc_sigma)
+{
+    enum { TAPS = 127 };
+    double h[TAPS], sum = 0.0;
+    const double fc = 0.5 * bw_hz / SYNTH_FS;   /* cycles per sample, one-sided */
+    for (int k = 0; k < TAPS; k++) {
+        const double x = k - (TAPS - 1) / 2.0;
+        const double sinc = x == 0.0 ? 2.0 * fc : sin(2.0 * M_PI * fc * x) / (M_PI * x);
+        h[k] = sinc * (0.54 - 0.46 * cos(2.0 * M_PI * k / (TAPS - 1)));
+        sum += h[k];
+    }
+    double *fi = calloc(s->n, sizeof(double)), *fq = calloc(s->n, sizeof(double));
+    if (fi == NULL || fq == NULL) {
+        free(fi);
+        free(fq);
+        return;
+    }
+    for (uint32_t n = 0; n < s->n; n++) {
+        double ai = 0.0, aq = 0.0;
+        for (int k = 0; k < TAPS; k++) {
+            const int64_t m = (int64_t)n - k + (TAPS - 1) / 2;
+            if (m >= 0 && m < (int64_t)s->n) {
+                ai += h[k] * s->i[m];
+                aq += h[k] * s->q[m];
+            }
+        }
+        fi[n] = ai / sum + adc_sigma * gauss(s);
+        fq[n] = aq / sum + adc_sigma * gauss(s);
+    }
+    memcpy(s->i, fi, s->n * sizeof(double));
+    memcpy(s->q, fq, s->n * sizeof(double));
+    free(fi);
+    free(fq);
+}
+
+uint8_t synth_gain_index = 40;
+
 static int32_t quant(double v, uint32_t *clipped)
 {
     long x = lround(v);
@@ -172,7 +212,7 @@ uint32_t synth_pack(const synth_t *s, uint32_t *words)
     for (uint32_t n = 0; n < s->n; n++) {
         const uint32_t i = (uint32_t)quant(s->i[n], &clipped) & 0x3ffu;
         const uint32_t q = (uint32_t)quant(s->q[n], &clipped) & 0x3ffu;
-        words[n] = i | (q << 10) | (40u << 20);   /* gain metadata: arbitrary */
+        words[n] = i | (q << 10) | ((uint32_t)synth_gain_index << 20);   /* gain metadata */
     }
     return clipped;
 }

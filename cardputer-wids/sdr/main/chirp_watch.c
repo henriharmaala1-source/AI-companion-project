@@ -49,6 +49,7 @@ static struct {
     unsigned head, count;
     uint64_t active_until_us, last_hit_us;
     uint8_t  last_sf;
+    lora_floor_t floor;              /* long-term noise floor (lora_detect.h) */
     lora_result_t last;              /* most recent scan */
     lora_result_t last_hit;          /* most recent positive scan */
     uint32_t snaps_total, hits_total, weak_total, cap_errors, scan_us_max, scan_us_last, step_us_last;
@@ -76,6 +77,7 @@ void chirp_watch_init(unsigned rate_code)
 }
 
 void chirp_watch_request_dump(void) { s.dump_requested = true; }
+void chirp_watch_reset_floor(void) { memset(&s.floor, 0, sizeof(s.floor)); }
 
 /* ------------------------------------------------------------ dump */
 
@@ -170,7 +172,7 @@ void chirp_watch_step(uint64_t now_us)
 
     const int64_t t0 = esp_timer_get_time();
     lora_result_t res;
-    if (!lora_scan(&snap, work, LORA_WORK_FLOATS, &res)) {
+    if (!lora_scan(&snap, work, LORA_WORK_FLOATS, &s.floor, &res)) {
         s.cap_errors++;
         return;
     }
@@ -232,6 +234,7 @@ void chirp_watch_status(uint64_t now_us, chirp_status_t *out)
     out->agc = s.last_hit.agc;
     out->snr_smooth_db = s.snr_smooth;
     out->delta_db = s.have_ref ? s.snr_smooth - s.snr_ref : 0.0f;
+    out->clip_frac = s.last.clip_frac;
 }
 
 void chirp_watch_log(uint64_t now_us)
@@ -258,7 +261,7 @@ void chirp_watch_log(uint64_t now_us)
                    "\"tier\":\"%s\",\"weak\":%s,\"sf\":%u,\"slope\":%d,"
                    "\"freq_mhz\":%.2f,\"cand_db\":%.1f,\"snr_db\":%.1f,\"dbfs\":%.1f,\"agc\":%u,"
                    "\"snr_smooth\":%.1f,\"delta_db\":%.1f,"
-                   "\"cands\":%u,\"sf5_8\":[%s],\"scan_ms\":%.1f,"
+                   "\"cands\":%u,\"clip_pct\":%.1f,\"sf5_8\":[%s],\"scan_ms\":%.1f,"
                    "\"scan_ms_max\":%.1f,\"step_ms\":%.1f,\"snaps\":%" PRIu32 ",\"hits\":%" PRIu32
                    ",\"weak_only\":%" PRIu32 ",\"cap_err\":%" PRIu32,
                    snaps, hits, agree, now_us < s.active_until_us ? "true" : "false",
@@ -266,7 +269,7 @@ void chirp_watch_log(uint64_t now_us)
                    r->weak && !r->detected ? "true" : "false", r->sf, r->slope,
                    (double)r->freq_hz / 1e6, (double)r->cand_db, (double)r->snr_db, (double)r->level_dbfs,
                    r->agc, (double)s.snr_smooth, (double)(s.have_ref ? s.snr_smooth - s.snr_ref : 0.0f),
-                   r->candidates, sfs,
+                   r->candidates, (double)(100.0f * s.last.clip_frac), sfs,
                    (double)s.scan_us_last / 1000.0, (double)s.scan_us_max / 1000.0,
                    (double)s.step_us_last / 1000.0, s.snaps_total, s.hits_total, s.weak_total, s.cap_errors);
 }

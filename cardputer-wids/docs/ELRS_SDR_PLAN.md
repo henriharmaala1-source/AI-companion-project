@@ -56,6 +56,17 @@ every 80 hops.
   the end, so short repeated runs are supported.
 - Spectrum frames leave the engine through `txq_push()`, then `ring_write()` in
   `ring_io.h`, which writes straight into USB FIFO registers.
+- **Upstream review, 2026-10-24 (e74f2a4 → f86da81, 48 commits, same IDF
+  pin).** For the S3 ring path, the only functional fix is `3b030e0`: don't
+  send empty end-of-run frames. We filter those on our side instead of moving
+  the pin. The rest is refactoring, other chips, USB throughput, the `IQS`
+  stream, and measured documentation. The documentation changed three of our
+  assumptions (BUGLOG):
+  - the analog filter leaves most of the 80 MS/s span ~25 dB down;
+  - the AGC clips on strong continuous signals;
+  - bits 20–27 of each captured word match the manual gain index we set.
+  Moving the pin is possible later (same IDF), but it needs a fresh hardware
+  check.
 
 ### Cardputer side
 
@@ -220,7 +231,7 @@ with the `r` key.
 against a modelled radio scene: `app_main.c`, `ui.cpp` through the real M5GFX
 drawing code, the detector, the decoder, the sink and the log. The esp-sdr
 engine is reduced to its frame-emission rules, each one cited to the upstream
-line. It checks the log, the verdict timeline and the screen in 15 scenarios.
+line. It checks the log, the verdict timeline and the screen in 17 scenarios.
 Its first run found the sink bug and two detector bugs in `BUGLOG.md`. It
 validates logic and timing. It cannot validate the antenna, the AGC or real
 signal levels: M0 still decides whether the idea works at all.
@@ -253,6 +264,14 @@ signal levels: M0 still decides whether the idea works at all.
    policy. The IDF Python environment was installed from PyPI instead.
 
 ## To do
+
+- [ ] **Field test the receiver settings** with the upstream-review build
+  (BUGLOG):
+  - Note `rx_filter_mhz` at boot, which is the S3's real default filter.
+  - At a fixed distance, compare `w` (widest) against the default: `snr_db`,
+    `window_hits` and `clip_pct`.
+  - Check whether `empty_frames` is above 0 (core 1 behind) and whether the
+    grid detector now separates ELRS on from off.
 
 - [ ] **Require hopping for an ELRS verdict.** A chirp verdict also needs hits
   on at least 3 different grid channels in the evidence window. Fixed-frequency
@@ -289,6 +308,19 @@ signal levels: M0 still decides whether the idea works at all.
 - [ ] Soak test: one hour, no crash, no heap drift (12 KB free at boot).
 
 ## Ideas, not scheduled
+
+- **A 16 MS/s "long look" (from the upstream review).** The S3 also captures
+  at 16 MS/s. Upstream's comment calls it a hardware path, "no software
+  resampling". The same 48 k-sample snapshot then lasts ~3 ms instead of
+  0.6 ms: a whole 250 Hz packet, including its 12–14 identical preamble
+  chirps, which could be added up for a few more dB. The cost: only 16 MHz
+  (~16 of 80 channels) per snapshot, so fewer snapshots catch a packet.
+  - Unknown first: does the S3 divider filter, or just skip samples?
+    (Upstream lists this as open; on the S2 and H2 it skips, so the band
+    aliases.) If it skips, narrow the analog filter to ~13–16 MHz first.
+  - Upstream's new gap-free `IQS` stream (16 MS/s ring, filtered on core 1)
+    is NOT a shortcut. Its output is at most 250 kS/s, narrower than one
+    812.5 kHz LoRa channel, and it is built for USB, not on-chip detection.
 
 - **Ignore our own link, flag other ELRS transmitters.** Three ways, from
   easy to strong. All use only our own link's properties, never other

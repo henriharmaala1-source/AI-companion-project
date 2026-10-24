@@ -30,6 +30,9 @@
 static uint32_t s_bank[UNITS][BANK];
 static uint32_t s_words[TOTAL];
 static float    s_work[LORA_WORK_FLOATS];
+static double   s_filter_bw;   /* > 0: pass everything through an analog low-pass model */
+static lora_floor_t *s_floor;  /* non-NULL: scans keep a long-term floor, as the firmware does */
+static double   s_rf_gain = 1.0; /* receiver gain: scales signal AND analog noise, not ADC noise */
 
 /* Spread s_words over the fake banks; unit 1 wraps. */
 static void build_snapshot(lora_snapshot_t *snap)
@@ -76,10 +79,15 @@ static lora_result_t run(unsigned sf, bool inv, double snr_db, double ch_hz, dou
     synth_t s;
     synth_init(&s, TOTAL, seed);
     if (sf) {
-        synth_lora(&s, sf, inv, ch_hz, amp_for_snr(snr_db) * gain, start_s, 60);
+        synth_lora(&s, sf, inv, ch_hz, amp_for_snr(snr_db) * gain * s_rf_gain, start_s, 60);
     }
-    add_extra(&s, x, extra_amp * gain);
-    synth_noise(&s, SIGMA);
+    add_extra(&s, x, extra_amp * gain * s_rf_gain);
+    synth_noise(&s, SIGMA * s_rf_gain);
+    if (s_filter_bw > 0.0) {
+        /* ADC noise 25 dB under the analog noise, as esp-sdr measured
+         * (docs/rx-controls.md): out-of-filter bins sit that much lower. */
+        synth_analog_filter(&s, s_filter_bw, SIGMA * pow(10.0, -25.0 / 20.0));
+    }
     const uint32_t c = synth_pack(&s, s_words);
     if (clipped) {
         *clipped = c;
@@ -88,7 +96,7 @@ static lora_result_t run(unsigned sf, bool inv, double snr_db, double ch_hz, dou
     lora_snapshot_t snap;
     build_snapshot(&snap);
     lora_result_t r;
-    assert(lora_scan(&snap, s_work, LORA_WORK_FLOATS, &r));
+    assert(lora_scan(&snap, s_work, LORA_WORK_FLOATS, s_floor, &r));
     return r;
 }
 
@@ -179,6 +187,67 @@ int main(int argc, char **argv)
                r.snr_db, expect, r.level_dbfs, r.agc);
         assert(r.detected && fabs(r.snr_db - expect) < 2.0);
     }
+
+    /* At 80 MS/s most bins lie outside the receiver's analog filter, about
+     * 25 dB below the in-band noise (esp-sdr docs/rx-controls.md). The SNR
+     * must be measured against the noise next to the signal, not against
+     * the median of the whole spectrum. */
+    printf("signal strength behind a 30 MHz analog filter (ADC noise 25 dB lower)\n");
+    s_filter_bw = 30e6;
+    for (double snr = 25.0; snr >= 5.0; snr -= 10.0) {
+        const lora_result_t r = run(6, false, snr, ch, -1e-3, X_NONE, 0, 1.0, 750 + (uint32_t)snr, NULL);
+        const double expect = snr - 1.7;
+        printf("  true %4.1f dB -> measured SNR %5.1f dB (expect %5.1f), detected %s\n", snr, r.snr_db, expect,
+               r.detected ? "yes" : "no");
+        assert(r.detected && fabs(r.snr_db - expect) < 2.0);
+    }
+    /* The filter's edges are steps 25 dB tall that a single snapshot takes
+     * for signals; they filled every candidate slot (BUGLOG). The firmware
+     * keeps a long-term floor (lora_floor_t), which removes them. */
+    {
+        /* ELRS hops: a different grid channel, inside the filter, each time. */
+#define HOP(t) (2400.4e6 + (double)(32u + (t) * 7u % 20u) * 1e6 - 2442e6)
+        unsigned alone = 0, with_floor = 0, fa = 0, weak = 0;
+        for (unsigned trial = 0; trial < 20; trial++) {
+            const lora_result_t r = run(6, trial & 1, 0.0, HOP(trial), -1e-3, X_NONE, 0, 1.0, 7700 + trial, NULL);
+            alone += r.detected && r.sf == 6;
+        }
+        static lora_floor_t fl;
+        memset(&fl, 0, sizeof(fl));
+        s_floor = &fl;
+        for (unsigned trial = 0; trial < 20; trial++) {   /* settle: no LoRa yet */
+            (void)run(0, false, 0, 0, 0, X_NONE, 0, 1.0, 7800 + trial, NULL);
+        }
+        for (unsigned trial = 0; trial < 20; trial++) {
+            const lora_result_t r = run(6, trial & 1, 0.0, HOP(trial), -1e-3, X_NONE, 0, 1.0, 7700 + trial, NULL);
+            with_floor += r.detected && r.sf == 6;
+        }
+        for (unsigned trial = 0; trial < 60; trial++) {   /* not LoRa, through the same filter */
+            const extra_t x = trial % 3 == 0 ? X_NONE : trial % 3 == 1 ? X_GFSK : X_OFDM;
+            const lora_result_t r = run(0, false, 0, 0, 0, x, 150, 1.0, 7900 + trial, NULL);
+            fa += r.detected;
+            weak += r.weak;
+        }
+        /* The AGC drops the gain 12 dB (a new gain index): everything before
+         * the ADC is 12 dB lower, below the learned floor. The floor must
+         * not blind the detector while it is relearned at the new gain. */
+        unsigned after_agc = 0;
+        synth_gain_index = 30;
+        s_rf_gain = 0.25;
+        for (unsigned trial = 0; trial < 20; trial++) {
+            const lora_result_t r = run(6, trial & 1, 0.0, HOP(trial + 3), -1e-3, X_NONE, 0, 1.0, 8100 + trial, NULL);
+            after_agc += r.detected && r.sf == 6;
+        }
+        s_rf_gain = 1.0;
+        synth_gain_index = 40;
+        s_floor = NULL;
+        printf("  SNR 0 dB behind the filter: detected %u/20 judged alone, %u/20 with the floor "
+               "(no filter: 20/20); not LoRa: %u/60 false, %u/60 weak; after a 12 dB gain drop: %u/20\n",
+               alone, with_floor, fa, weak, after_agc);
+        assert(with_floor >= 19 && fa == 0 && after_agc >= 17);
+#undef HOP
+    }
+    s_filter_bw = 0.0;
 
     printf("overload: LoRa driven 4x past full scale (clips), like a TX 2 m away\n");
     {

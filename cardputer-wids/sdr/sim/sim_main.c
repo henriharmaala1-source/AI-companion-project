@@ -44,6 +44,7 @@ typedef struct {
     const char *what;
     double   duration_s;
     bool     inverted;
+    float    abandon;            /* fraction of FFT work core 1 abandons */
     rf_scene_t scene;
     sim_key_t keys[16];
     unsigned n_keys;
@@ -183,6 +184,35 @@ static void sc_elrs_f1000(scenario_t *s) { rate_case(s, "ELRS F1000 (FLRC, 2 ms 
 static void sc_elrs_250(scenario_t *s) { rate_case(s, "ELRS 250 Hz (16 ms dwell)", elrs_250(25.0f, 2, 1e9)); }
 static void sc_elrs_50(scenario_t *s) { rate_case(s, "ELRS 50 Hz (40 ms dwell, slowest)", elrs_50(25.0f, 2, 1e9)); }
 
+/* Core 1 falling behind (the first hardware run abandoned 88 % of its FFT
+ * work). The pinned esp-sdr then ends a slice with an empty, all-zero frame
+ * (sim_engine.c). Fed to the grid detector, those pull its noise floor down
+ * every slice. */
+static void sc_core1_behind_no_elrs(scenario_t *s)
+{
+    s->what = "Core 1 drops 88 % of its FFTs (empty end-of-slice frames), no ELRS: never DETECTED";
+    s->duration_s = 60;
+    s->abandon = 0.88f;   /* the first hardware run */
+    home_background(s);
+    add(s, bt_audio(30.0f, 6));
+    shot(s, 59, "end", SHOT_NOT_DETECTED);
+}
+
+static void sc_core1_behind_elrs(scenario_t *s)
+{
+    s->what = "Core 1 drops 88 % of its FFTs, ELRS 250 Hz on: still DETECTED";
+    s->duration_s = 40;
+    s->abandon = 0.88f;   /* the first hardware run */
+    home_background(s);
+    add(s, elrs_250(25.0f, 2, 1e9));
+    s->expect_detect = true;
+    s->elrs_on_s = 2;
+    s->elrs_off_s = 1e9;
+    s->detect_within_s = 12;
+    s->detect_after_s = 2;
+    shot(s, 39, "end", SHOT_DETECTED);
+}
+
 static void sc_elrs_in_crowd(scenario_t *s)
 {
     s->what = "ELRS 250 Hz alongside Bluetooth audio, BLE and busy Wi-Fi";
@@ -290,7 +320,7 @@ static void sc_inverted_then_i(scenario_t *s)
 
 static void sc_keys(scenario_t *s)
 {
-    s->what = "Every key: + - t c g d ; .; log records each change, details view works";
+    s->what = "Every key: + - t c g d ; . w; log records each change, details view works";
     s->duration_s = 20;
     home_background(s);
     key(s, 3, '+');
@@ -304,9 +334,11 @@ static void sc_keys(scenario_t *s)
     key(s, 13.5, '.');  /* down arrow: 40 */
     key(s, 14, ';');    /* 44, shown on the main view at 15 s */
     key(s, 17, 'g');    /* back to AGC */
+    key(s, 18, 'w');    /* widest analog filter */
     s->need_whys[0] = "threshold";
     s->need_whys[1] = "clear";
     s->need_whys[2] = "gain";
+    s->need_whys[3] = "filter";
     shot(s, 10, "details", SHOT_DETAILS);
     shot(s, 15, "main", SHOT_NOT_DETECTED);
 }
@@ -320,6 +352,8 @@ static const entry_t k_scenarios[] = {
     { "home_no_elrs", sc_home_no_elrs },
     { "bt_audio_no_afh", sc_bt_audio_no_afh },
     { "soak_crowd", sc_soak_crowd },
+    { "core1_behind_no_elrs", sc_core1_behind_no_elrs },
+    { "core1_behind_elrs", sc_core1_behind_elrs },
     { "elrs_500_arrives", sc_elrs_500_arrives },
     { "elrs_f1000", sc_elrs_f1000 },
     { "elrs_250", sc_elrs_250 },
@@ -500,6 +534,7 @@ static void engine_notes(const scenario_t *sc)
          (unsigned long long)e->frames_over_10ms);
     note("queue: %llu drains timed out, %llu bytes discarded at run start",
          (unsigned long long)e->drain_timeouts, (unsigned long long)e->txq_discarded);
+    note("empty frames (no FFT, end of slice): %llu", (unsigned long long)e->empty_frames);
 }
 
 /* ------------------------------------------------------------ running */
@@ -522,6 +557,7 @@ static int run_one(const entry_t *en, const char *outdir)
 
     printf("%s: %s\n", en->name, sc.what);
     sim_engine_attach(&sc.scene, sc.inverted);
+    sim_engine_set_abandon(sc.abandon);
     if (!sim_platform_start(path, sc.duration_s, sc.keys, sc.n_keys, tick)) {
         fprintf(stderr, "cannot write %s\n", path);
         return 1;

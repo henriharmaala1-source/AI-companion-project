@@ -14,11 +14,16 @@ typedef struct {
     uint64_t frames_over_10ms; /* frames that smear several ELRS hops together */
     uint64_t drain_timeouts;   /* runs whose output never fully left the queue */
     uint64_t txq_discarded;    /* bytes thrown away when the next run reset the queue */
+    uint64_t empty_frames;     /* frames sent with no FFT in them (pinned upstream, :1287) */
 } sim_engine_stats_t;
 
 /* The scene the "antenna" sees; `inverted` mirrors the spectrum, standing in
  * for the unknown orientation of the real hardware (plan M0). */
 void sim_engine_attach(const rf_scene_t *scene, bool inverted);
+
+/* Abandon this fraction of ring units' FFT work, as core 1 does when it
+ * falls behind (0 = never, the default). */
+void sim_engine_set_abandon(float fraction);
 const sim_engine_stats_t *sim_engine_stats(void);
 
 #endif /* SIM_ENGINE_H */

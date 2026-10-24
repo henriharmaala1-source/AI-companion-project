@@ -23,6 +23,9 @@ typedef struct {
     int      gain;         /* -1 = hardware AGC, else fixed PHY gain index */
     bool     chirp_active; /* LoRa chirp verdict holds */
     bool     chirp_weak;   /* ...on agreeing weak snapshots only */
+    unsigned rx_filter_mhz;   /* analog filter width in force, 0 = unknown */
+    bool     rx_filter_wide;  /* 'w' set the widest filter */
+    float    chirp_clip;      /* last snapshot: samples at the ADC rail (0..1) */
     uint8_t  chirp_sf;     /* SF of the last LoRa hit, 0 = none */
     uint16_t chirp_hits, chirp_snaps; /* in the evidence window */
     uint64_t chirp_last_us;

@@ -20,7 +20,18 @@
  * false alarm added. A false candidate costs time, never a false alarm:
  * the dechirp decides. */
 #define CAND_MIN_DB      1.0f   /* channel over its neighbours (narrowband excess) */
-#define CAND_FLOOR_DB    1.0f   /* channel over the median bin */
+#define CAND_FLOOR_DB    1.0f   /* channel over its long-term floor (or the median bin) */
+/* lora_floor_t tracking, per snapshot: fall a quarter of the way to a lower
+ * reading, rise 0.05 dB. A hopping ELRS link is on a given channel in ~1 %
+ * of snapshots and never lifts it; a parked carrier is absorbed at ~0.35 dB/s
+ * (7 snapshots/s). */
+#define FLOOR_FALL       0.25f
+#define FLOOR_RISE       1.0116f
+/* The floor is only comparable at the gain it was learned at; the hardware
+ * AGC can move between snapshots. A snapshot at another gain index is judged
+ * the single-snapshot way and leaves the floor alone. If the new gain lasts
+ * this many snapshots (~1 s), the floor is relearned there. */
+#define FLOOR_RELEARN    8u
 #define COARSE_BLOCKS    48u    /* FFT blocks averaged, spread over the snapshot */
 #define EDGE_HZ          34e6f  /* ignore beyond: analogue roll-off */
 #define GRID_FRAC_HZ     400e3f /* ELRS grid offset from an integer MHz */
@@ -160,12 +171,9 @@ static void fft(float *x, unsigned n) { lora_fft(x, n); }
 
 typedef struct {
     float freq_hz;
-    float db;
+    float db;      /* over the quieter neighbour */
+    float noise;   /* noise power per full-rate sample next to this channel */
 } cand_t;
-
-/* Noise power per complex sample at the full rate, from the coarse
- * spectrum's median bin: E|X|^2 = sigma^2 * sum(w^2) for white noise. */
-static float s_noise_per_sample;
 
 static int cmp_float(const void *a, const void *b)
 {
@@ -225,7 +233,8 @@ static void keep_best(cand_t *out, unsigned *found, cand_t c)
 /* Average power spectrum over the snapshot, then rank the ELRS grid
  * positions by how far each stands out from its neighbours: a narrow LoRa
  * burst does, a 20 MHz Wi-Fi plateau does not. */
-static unsigned find_candidates(const lora_snapshot_t *s, float *power, float *buf, cand_t *out)
+static unsigned find_candidates(const lora_snapshot_t *s, float *power, float *buf, lora_floor_t *fl,
+                                uint8_t agc, cand_t *out, float *clip_frac)
 {
     const unsigned n = LORA_COARSE_N;
     const uint32_t total = lora_snapshot_len(s);
@@ -237,6 +246,7 @@ static unsigned find_candidates(const lora_snapshot_t *s, float *power, float *b
      * must end below the RF ring) and no cosf() per sample (slow on the S3). */
     const float wr = cosf(TWO_PI / (float)n), wi = sinf(TWO_PI / (float)n);
     memset(power, 0, n * sizeof(float));
+    uint32_t clipped = 0;
     for (uint32_t b = 0; b < blocks; b++) {
         reader_t r;
         reader_seek(&r, s, (uint32_t)((uint64_t)b * (total - n) / (blocks > 1 ? blocks - 1 : 1)));
@@ -244,6 +254,7 @@ static unsigned find_candidates(const lora_snapshot_t *s, float *power, float *b
         for (unsigned k = 0; k < n; k++) {
             float i = 0.0f, q = 0.0f;
             (void)reader_next(&r, &i, &q);
+            clipped += i >= 511.0f || i <= -512.0f || q >= 511.0f || q <= -512.0f;
             const float w = 0.5f - 0.5f * cr;
             buf[2 * k] = i * w;
             buf[2 * k + 1] = q * w;
@@ -257,11 +268,26 @@ static unsigned find_candidates(const lora_snapshot_t *s, float *power, float *b
         }
     }
 
+    *clip_frac = (float)clipped / ((float)blocks * (float)n);
+
     /* median of the power, via a sorted copy in the FFT buffer */
     memcpy(buf, power, n * sizeof(float));
     qsort(buf, n, sizeof(float), cmp_float);
     const float median = buf[n / 2] > 0.0f ? buf[n / 2] : 1e-9f;
-    s_noise_per_sample = median / ((float)blocks * 0.375f * (float)n);   /* Hann: sum(w^2) = 3n/8 */
+    /* Coarse bin power -> noise power per sample: E|X|^2 = sigma^2 * sum(w^2)
+     * for white noise, and Hann's sum(w^2) = 3n/8. */
+    const float per_sample = 1.0f / ((float)blocks * 0.375f * (float)n);
+
+    /* Use (and update) the floor only at the gain it was learned at. */
+    if (fl && fl->ready && agc != fl->agc) {
+        if (++fl->other_agc >= FLOOR_RELEARN) {
+            fl->ready = false;   /* the gain moved for good: relearn below */
+        } else {
+            fl = NULL;           /* this snapshot only */
+        }
+    } else if (fl) {
+        fl->other_agc = 0;
+    }
 
     unsigned found = 0;
     const float bin_hz = (float)s->fs_hz / (float)n;
@@ -275,14 +301,38 @@ static unsigned find_candidates(const lora_snapshot_t *s, float *power, float *b
             const float pl = band_power(power, n, bin_hz, f - NEIGH_OUT_HZ, f - NEIGH_IN_HZ);
             const float pr = band_power(power, n, bin_hz, f + NEIGH_IN_HZ, f + NEIGH_OUT_HZ);
             const float pn = fminf(pl, pr) > 0.0f ? fminf(pl, pr) : median;
-            if (pc <= 0.0f || 10.0f * log10f(pc / median) < CAND_FLOOR_DB) {
+            /* Over the long-term floor of the same bins when there is one:
+             * that removes filter edges (lora_floor_t). Else the median. */
+            const float ref = fl && fl->ready ? band_power(fl->bin, n, bin_hz, f - CHAN_HALF_HZ, f + CHAN_HALF_HZ)
+                                              : median;
+            if (pc <= 0.0f || ref <= 0.0f || 10.0f * log10f(pc / ref) < CAND_FLOOR_DB) {
                 continue;
             }
             const float excess = 10.0f * log10f(pc / pn);
             if (excess >= CAND_MIN_DB) {
-                keep_best(out, &found, (cand_t){ f, excess });
+                /* Noise for the SNR: the quieter neighbour, NOT the median:
+                 * at 80 MS/s most bins lie outside the analog filter (esp-sdr
+                 * docs/rx-controls.md), and the median made SNRs read ~23 dB
+                 * high (host test). */
+                keep_best(out, &found, (cand_t){ f, excess, pn * per_sample });
             }
         }
+    }
+    if (fl) {
+        for (unsigned k = 0; k < n; k++) {
+            if (!fl->ready) {
+                fl->bin[k] = power[k];
+            } else if (power[k] < fl->bin[k]) {
+                fl->bin[k] += FLOOR_FALL * (power[k] - fl->bin[k]);
+            } else {
+                fl->bin[k] *= FLOOR_RISE;
+            }
+        }
+        if (!fl->ready) {
+            fl->agc = agc;
+            fl->other_agc = 0;
+        }
+        fl->ready = true;
     }
     return found;
 }
@@ -515,8 +565,8 @@ static bool sf_passes(const lora_sf_metric_t *m, bool weak)
 
 /* Strength of a detected signal: the loudest window's mean power (the
  * packet may cover only part of the snapshot) against the noise expected
- * in the decimator's ~1.2 MHz bandwidth. */
-static void measure(const float *z, unsigned m, unsigned sf, lora_result_t *out)
+ * in the decimator's ~1.2 MHz bandwidth, from the neighbour bands. */
+static void measure(const float *z, unsigned m, unsigned sf, float noise_per_sample, lora_result_t *out)
 {
     unsigned len = (unsigned)((float)(1u << sf) * (float)LORA_DECIM_RATE / LORA_BW_HZ);
     len = len > m ? m : len;
@@ -529,14 +579,15 @@ static void measure(const float *z, unsigned m, unsigned sf, lora_result_t *out)
         best = fmaxf(best, p / (float)len);
     }
     const float full_scale = 512.0f * 512.0f;   /* 10-bit complex full scale */
-    const float noise = s_noise_per_sample * (1.2e6f / 80e6f);
+    const float noise = noise_per_sample * (1.2e6f / 80e6f);
     out->level_dbfs = 10.0f * log10f(fmaxf(best, 1e-6f) / full_scale);
     out->snr_db = 10.0f * log10f(fmaxf(best - noise, 1e-6f) / fmaxf(noise, 1e-9f));
 }
 
 /* ------------------------------------------------------------ scan */
 
-bool lora_scan(const lora_snapshot_t *s, float *work, size_t work_floats, lora_result_t *out)
+bool lora_scan(const lora_snapshot_t *s, float *work, size_t work_floats, lora_floor_t *floor,
+               lora_result_t *out)
 {
     /* The decimator is designed for 80 MS/s (64 x 1.25 MS/s), the rate the
      * firmware uses. */
@@ -553,8 +604,8 @@ bool lora_scan(const lora_snapshot_t *s, float *work, size_t work_floats, lora_r
     design_taps(taps);
 
     cand_t cand[LORA_MAX_CAND];
-    out->candidates = find_candidates(s, power, buf, cand);
     out->agc = s->nseg > 0 && s->seg[0].n > 0 ? (uint8_t)(s->seg[0].p[0] >> 20) : 0;
+    out->candidates = find_candidates(s, power, buf, floor, out->agc, cand, &out->clip_frac);
 
     const float rate = (float)LORA_DECIM_RATE;
     float best_rank = -1.0f;
@@ -596,7 +647,7 @@ bool lora_scan(const lora_snapshot_t *s, float *work, size_t work_floats, lora_r
             out->cand_db = cand[c].db;
             memcpy(out->sf_metric, metric, sizeof(metric));
             if (use >= 0) {
-                measure(z, m, out->sf, out);   /* now: the next candidate reuses z */
+                measure(z, m, out->sf, cand[c].noise, out);   /* now: the next candidate reuses z */
             }
         }
         if (out->detected) {

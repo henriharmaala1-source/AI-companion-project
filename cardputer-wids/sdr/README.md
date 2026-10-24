@@ -40,9 +40,11 @@ says which one (`grid`, `chirp`, `chirp+grid`).
 **Signal strength.** For each chirp detection the `lora` log carries three
 numbers:
 
-- `snr_db`: dB above the noise in the 1.2 MHz baseband. This is shown on
-  screen. It hardly depends on the AGC, so it is the "how close" number.
-  Host-tested to within 0.1 dB.
+- `snr_db`: dB above the noise in the 1.2 MHz baseband, the noise taken
+  from the bands beside the channel. This is shown on screen. It hardly
+  depends on the AGC, so it is the "how close" number. Host-tested to within
+  1 dB, also behind a modelled analog filter (BUGLOG: it used to read ~23 dB
+  high there).
 - `dbfs`: dB relative to the ADC's full scale.
 - `agc`: the gain index stamped in the snapshot.
 
@@ -55,9 +57,23 @@ itself reports, or by holding the gain fixed (`g`, arrows).
 `d` details · `c` clear · `+`/`-` threshold · `i` invert spectrum ·
 `g` hardware AGC ↔ fixed gain · `;` (↑) / `.` (↓) fixed gain ±4 (leaves
 AGC; starts from 40, upstream's default index; a PHY index, not dB) ·
+`w` analog filter: PHY default ↔ widest (~69 MHz), a field test (see below) ·
 `t` test alert · `r` log the next raw snapshot (`bb` baseband + `raw` words,
 to check the dechirp offline). A fixed gain stays on the main view until `g`
 returns to AGC.
+
+**Receiver limits in the log** (from esp-sdr's own measurements,
+`docs/rx-controls.md`):
+- `diag` carries `rx_filter_code`/`rx_filter_mhz`, the analog filter in
+  force. It is read back from the register on each run, and the MHz figure
+  comes from upstream's S3 curve.
+- `lora` carries `clip_pct`, the share of samples at the ADC rail. The
+  Wi-Fi AGC does not protect against a strong continuous signal; if
+  `clip_pct` climbs near a transmitter, use a fixed gain.
+- `diag` also carries `floor_db`/`peak_db` (grid detector) and
+  `empty_frames` (spectrum frames without an FFT, now ignored; see BUGLOG).
+
+The details view shows `flt <MHz>` (`W` = widest) and `clip <%>`.
 
 ## Screen
 
@@ -78,10 +94,10 @@ details view with the channel strip and detector numbers.
 | `components/cp_keyboard`: GPIO-matrix keyboard port | written. Keymap **host-tested**, GPIO side untested |
 | `components/sdr_engine`: esp-sdr engine wrapper, RAM sink, transport overlay | **compiles and links** with the pinned IDF, 0 warnings |
 | `main/`: app loop, M5GFX screen, NDJSON log | **compiles and links**, 0 warnings (our code builds with `-Werror`) |
-| Build files | done. Static data ends 7,872 bytes below the RF ring; app image 807 KB |
+| Build files | done. Static data ends 6,816 bytes below the RF ring; app image 808 KB |
 | `components/lora_detect`: LoRa chirp detector (dechirp, SF5–SF8, both directions) | **host-tested** on synthetic SX1280-style LoRa: 0 false alarms in 180 interference cases, 50 % detection per snapshot at about −3 dB in-band SNR (weak tier about −4.5 dB), works when hard-clipped. **Works on hardware** (below) |
-| `main/chirp_watch.c`: raw snapshots between slices, evidence window, weak tier | in the simulator (15/15 scenarios). Full tier works on hardware; weak tier and adaptive rate **not yet run on hardware** |
-| `sim/`: whole-firmware simulator on a PC | **15/15 scenarios pass**, including a 10-minute crowded-band soak. Found and fixed 3 bugs (see `../BUGLOG.md`) |
+| `main/chirp_watch.c`: raw snapshots between slices, evidence window, weak tier | in the simulator (17/17 scenarios). Full tier works on hardware; weak tier, adaptive rate, noise-floor profile and filter key **not yet run on hardware** |
+| `sim/`: whole-firmware simulator on a PC | **17/17 scenarios pass**, including a 10-minute crowded-band soak and core 1 falling behind. Found and fixed 4 bugs (see `../BUGLOG.md`) |
 | On hardware | Chirp detector detects a 250 Hz ExpressLRS controller (SF6, down-chirps) and clears when it is off; 100–200 m from inside a closed car. Grid detector cannot separate ELRS from clutter. See `../BUGLOG.md` |
 
 The tests and the simulator show the logic and timing do what they claim on a

@@ -8,6 +8,76 @@ Newest at the top.
 
 ---
 
+## Upstream review (esp-sdr e74f2a4 → f86da81): three problems on our side
+
+esp-sdr gained 48 commits in a week, all with the same ESP-IDF pin. Reading
+them against our port turned up three problems. None could have shown in the
+host tests or the simulator, because neither modelled what upstream had just
+documented.
+
+**1. Empty frames dragged the grid detector's floor down.** Upstream fixed
+this in `3b030e0`: when core 1 falls behind, it abandons a unit's FFT work.
+At our pin, a frame is closed mid-run only if it holds an FFT (`:1191`), but
+the final frame of a run goes out whenever it holds a unit (`:1287`), from
+the zeroed accumulator. A slice ending in abandoned units therefore delivered
+an all-zero spectrum. We end a run every 100 ms, and the first hardware run
+abandoned 88 % of its FFTs. The simulator now models abandonment: at 88 %,
+146 empty frames in 60 s. The grid detector's floor tracker drops fast on low
+readings, so its floor sagged from 33 to 25–30 dB, and with the threshold at
++10 dB, noise started to count as bursts. That matches the "ELRS on and off
+look the same" symptom of the first hardware run, though it may not be the
+whole cause.
+**Fix:** `on_frame()` skips frames with `ffts == 0` and counts them
+(`empty_frames` in `diag`). The floor now holds at 30 dB.
+
+**2. The chirp detector's SNR read ~23 dB high.** Upstream
+`docs/rx-controls.md`: "At 80 MS/s most FFT bins lie outside the analog
+filter, and their median is about 25 dB lower than the noise inside it."
+`lora_detect` took its noise from exactly that median. A new host model (a
+30 MHz analog low-pass, plus ADC noise 25 dB lower) reproduced it: a 23 dB
+signal measured 46 dB. Detection itself was unaffected, because the dechirp
+score normalises itself.
+**Fix:** noise comes from the quieter neighbour band of each candidate. With
+or without the filter, it is within 1 dB of the truth.
+
+**3. Filter edges took every candidate slot.** Found while testing fix 2. A
+channel enters the dechirp by standing out from its quieter neighbour. At an
+edge of the analog filter, the outer neighbour is 25 dB down, so the edge
+looks like a strong signal. Edges filled all six slots: behind the filter,
+detection at 0 dB fell from 20/20 to 5/20.
+- Ranking by the louder neighbour fixed the edges, but lost LoRa next to a
+  carrier 1.9 MHz away. A single snapshot cannot tell those two cases apart.
+
+**Fix:** a long-term per-bin noise floor (`lora_floor_t`). It falls fast and
+rises 0.05 dB per snapshot, so it learns the filter shape and steady carriers.
+A candidate must also stand 1 dB above that floor.
+- Filter edges are always in the same place, so they never stand above it.
+- ELRS hops, so a given channel holds it in only ~1 % of snapshots, and it
+  stays above the floor.
+- Result: behind the filter, 20/20 at 0 dB and 0/60 false.
+- Side effect: LoRa parked on one channel fades into the floor over tens of
+  seconds, which fits the "require hopping" to-do.
+- The floor resets on any gain, filter or threshold change.
+- **Hardware AGC.** The floor remembers the gain index it was learned at
+  (bits 20–27 of each sample). A snapshot at another index is judged the
+  old way and leaves the floor alone; after 8 such snapshots in a row (~1 s)
+  the floor is relearned. Host test: 19/20 right after a 12 dB gain drop.
+  (A first version of that test scaled only the signal, which tests SNR,
+  not gain; a real AGC step moves the signal and the analog noise together.)
+
+**Still unknown: the S3's actual default filter width.** `diag` now reports
+`rx_filter_code` and `rx_filter_mhz`, read back from the register around
+each run using upstream's own calls and S3 curve. `w` switches to the widest
+setting (~69 MHz) the way upstream's `BANDWIDTH 0` does. Whether wider is
+better (more ELRS channels at full sensitivity, but more Wi-Fi into the AGC)
+is for the field test to decide.
+
+**Lesson.** A pinned dependency is not a frozen one. Its authors keep
+learning things about the hardware that change what our code should assume.
+Reading their commit log was worth more than another week of guessing.
+
+---
+
 ## The chirp detector threw away signals it could have found (3 dB gate)
 
 **Symptom.** Host sensitivity sweep, SF6: detected 10/10 at +5 dB in-band

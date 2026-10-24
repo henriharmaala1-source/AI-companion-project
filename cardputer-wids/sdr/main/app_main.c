@@ -82,6 +82,8 @@ typedef struct {
     bool            gain_seen;
     int             gain;          /* -1 = hardware AGC, else fixed index */
     int             gain_fixed;    /* last fixed index: where 'g' and the arrows resume */
+    uint32_t        empty_frames;  /* frames with no FFT in them, since the last "diag" */
+    int             rx_filter;     /* -1: PHY default; else capacitor code ('w') */
 } app_t;
 
 static app_t *s_app; /* heap, not BSS: static data must end below the RF ring */
@@ -99,6 +101,14 @@ static void usb_sink(const char *data, size_t len)
 static void on_frame(const spc1_frame_t *f, void *ctx)
 {
     app_t *a = ctx;
+    /* Pinned esp-sdr ends a slice with an all-zero frame when core 1 dropped
+     * every FFT of the final stretch (upstream fixed it in 3b030e0, after our
+     * pin). Fed to the grid detector, zeros drag its noise floor down 3-8 dB
+     * (simulator, BUGLOG). A frame without an FFT carries no measurement. */
+    if (f->ffts == 0) {
+        a->empty_frames++;
+        return;
+    }
     /* pair_index restarts at 0 every slice; anchor it to wall time. */
     const uint64_t t_us = (uint64_t)a->slice_start_us + f->pair_index * 1000000ull / a->fs_hz;
     const uint32_t dur_us = (uint32_t)((uint64_t)f->pairs * 1000000ull / a->fs_hz);
@@ -143,11 +153,13 @@ static void drain_sink(app_t *a)
 static void restart_detector(app_t *a, const char *why)
 {
     elrs_init(&a->det, &a->cfg);
+    chirp_watch_reset_floor();   /* levels move with gain and filter */
     wids_log_event("elrs_config",
                    "\"why\":\"%s\",\"center_khz\":%" PRIu32 ",\"fs\":%" PRIu32
-                   ",\"threshold_db\":%u,\"invert\":%s,\"gain\":%d,\"band\":\"2.4GHz-only\",\"tx\":\"none\"",
+                   ",\"threshold_db\":%u,\"invert\":%s,\"gain\":%d,\"rx_filter\":%d,"
+                   "\"band\":\"2.4GHz-only\",\"tx\":\"none\"",
                    why, a->cfg.center_khz, a->cfg.sample_rate_hz, (unsigned)a->cfg.threshold_db,
-                   a->cfg.invert ? "true" : "false", a->gain);
+                   a->cfg.invert ? "true" : "false", a->gain, a->rx_filter);
 }
 
 /* "[1,2,3]" into out; always NUL-terminated. */
@@ -168,7 +180,7 @@ static void fmt_counts(char *out, size_t cap, const uint32_t *v, size_t n)
     }
 }
 
-static void log_diag(app_t *a)
+static void log_diag(app_t *a, const elrs_status_t *st)
 {
     elrs_diag_t dg;
     char phase[160], width[128];
@@ -178,10 +190,14 @@ static void log_diag(app_t *a)
     wids_log_event("diag",
                    "\"phase_from_khz\":%d,\"phase_step_khz\":%d,\"phase\":%s,\"width_bins\":%s,"
                    "\"clipped\":%" PRIu32 ",\"inv\":%s,\"thr_db\":%u,\"gain\":%d,"
-                   "\"gain_meta_lo\":%u,\"gain_meta_hi\":%u",
+                   "\"gain_meta_lo\":%u,\"gain_meta_hi\":%u,\"floor_db\":%d,\"peak_db\":%d,"
+                   "\"empty_frames\":%" PRIu32 ",\"rx_filter_code\":%d,\"rx_filter_mhz\":%u",
                    -500, ELRS_DIAG_PHASE_KHZ, phase, width, dg.clipped, a->cfg.invert ? "true" : "false",
-                   (unsigned)a->cfg.threshold_db, a->gain, a->gain_lo, a->gain_hi);
+                   (unsigned)a->cfg.threshold_db, a->gain, a->gain_lo, a->gain_hi, st->floor_db, st->peak_db,
+                   a->empty_frames, sdr_engine_rx_filter_code(),
+                   sdr_engine_rx_filter_mhz(sdr_engine_rx_filter_code()));
     a->gain_seen = false;
+    a->empty_frames = 0;
 }
 
 /* The strongest frame of the period, raw codes in natural FFT order (bin 0 =
@@ -244,6 +260,7 @@ void app_main(void)
     app_t *a = s_app;
     a->gain = -1;   /* hardware AGC until 'g' or an arrow key is pressed */
     a->gain_fixed = GAIN_DEFAULT;
+    a->rx_filter = -1;   /* PHY-calibrated filter until 'w' */
 
     if (sdr_engine_init(CENTER_MHZ) != ESP_OK) {
         fatal("radio init failed", "check IDF pin / build");
@@ -365,6 +382,12 @@ void app_main(void)
             next_ui = 0;
             break;
         }
+        case 'w': /* analog filter: PHY default <-> widest (~69 MHz), a hardware test */
+            a->rx_filter = a->rx_filter < 0 ? 0 : -1;
+            sdr_engine_set_rx_filter(a->rx_filter);
+            restart_detector(a, "filter");
+            next_ui = 0;
+            break;
         case 'r': /* log the next raw snapshot, to check the dechirp offline */
             chirp_watch_request_dump();
             break;
@@ -389,6 +412,8 @@ void app_main(void)
                 .chirp_snaps = cs.snaps, .chirp_last_us = cs.last_hit_us, .last_detected_us = last_detected_us,
                 .chirp_snr_db = cs.snr_smooth_db, .chirp_delta_db = cs.delta_db, .chirp_dbfs = cs.level_dbfs,
                 .chirp_agc = cs.agc,
+                .rx_filter_mhz = sdr_engine_rx_filter_mhz(sdr_engine_rx_filter_code()),
+                .rx_filter_wide = a->rx_filter >= 0, .chirp_clip = cs.clip_frac,
             };
             ui_update(&shown, &info);
             next_ui = now + UI_PERIOD_US;
@@ -403,7 +428,7 @@ void app_main(void)
             next_stats = now + STATS_PERIOD_US;
         }
         if (now >= next_diag) {
-            log_diag(a);
+            log_diag(a, &st);
             chirp_watch_log((uint64_t)now);
             next_diag = now + DIAG_PERIOD_US;
         }

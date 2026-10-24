@@ -37,6 +37,11 @@ void synth_gfsk(synth_t *s, double f_hz, double amp);
 void synth_ofdm(synth_t *s, double f_hz, double amp);
 void synth_cw(synth_t *s, double f_hz, double amp);
 void synth_noise(synth_t *s, double sigma);
+/* Low-pass everything so far to bw_hz (two-sided), then add ADC noise. */
+void synth_analog_filter(synth_t *s, double bw_hz, double adc_sigma);
+
+/* Gain index stamped into bits 20-27 of every packed word (default 40). */
+extern uint8_t synth_gain_index;
 
 /* Quantise and pack into words; returns clipped-sample count. */
 uint32_t synth_pack(const synth_t *s, uint32_t *words);

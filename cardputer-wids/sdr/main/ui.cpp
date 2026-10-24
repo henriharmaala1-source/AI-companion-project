@@ -217,14 +217,22 @@ static void draw_details(const elrs_status_t *st, const ui_info_t *info)
     } else {
         snprintf(gain, sizeof(gain), "%d", info->gain);
     }
-    snprintf(line, sizeof(line), "gain %s slice %ums drops %u crc %u", gain, (unsigned)info->slice_ms,
-             (unsigned)info->drops, (unsigned)info->crc_bad);
+    /* Filter width and clipping: the two receiver limits esp-sdr documents
+     * (docs/rx-controls.md). Slice length and drops are in the log. */
+    char flt[12];
+    if (info->rx_filter_mhz) {
+        snprintf(flt, sizeof(flt), "%u%s", info->rx_filter_mhz, info->rx_filter_wide ? "W" : "");
+    } else {
+        snprintf(flt, sizeof(flt), "?");
+    }
+    snprintf(line, sizeof(line), "gain %s flt %sMHz clip %.0f%% crc %u", gain, flt,
+             (double)(100.0f * info->chirp_clip), (unsigned)info->crc_bad);
     display.print(line);
     /* Key reference lives here, off the main view. */
     display.setCursor(2, 112);
-    display.print("[d]etails [c]lear [+/-]threshold");
+    display.print("[d]etails [c]lear [+/-]thr [t]est");
     display.setCursor(2, 124);
-    display.print("[i]nv [g]AGC [;/.]gain [r]aw [t]est");
+    display.print("[i]nv [g]AGC [;/.]gain [w]ide [r]aw");
 }
 
 extern "C" void ui_update(const elrs_status_t *st, const ui_info_t *info)

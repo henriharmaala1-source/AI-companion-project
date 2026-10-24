@@ -90,15 +90,39 @@ typedef struct {
     uint8_t  agc;            /* receiver gain index stamped in the snapshot (AGC moves it):
                               * dBFS is only comparable at the same index */
     unsigned candidates;     /* peaks tested */
+    float    clip_frac;      /* samples at the ADC rail (of those read for the coarse
+                              * spectrum): the Wi-Fi AGC lets a strong continuous
+                              * signal clip (esp-sdr docs/rx-controls.md) */
     lora_sf_metric_t sf_metric[LORA_SF_MAX - LORA_SF_MIN + 1u]; /* for the reported candidate */
 } lora_result_t;
+
+/* The receiver's long-term noise floor per coarse FFT bin, kept by the
+ * caller from one scan to the next (zero-initialise it once).
+ *
+ * Why: at 80 MS/s most of the spectrum lies outside the receiver's analog
+ * filter, ~25 dB down (esp-sdr docs/rx-controls.md). Each filter edge is a
+ * step that looks like a strong signal to a single-snapshot "stands out
+ * from its neighbours" test, and edges filled every candidate slot (host
+ * test: 6/20 detected at 0 dB behind a 30 MHz filter). An edge is in the
+ * same place every snapshot; ELRS hops. Against a floor that follows the
+ * quietest recent level of each bin, edges and steady carriers vanish and
+ * a hopping signal stands out. A side effect: LoRa parked on one channel
+ * fades into the floor over tens of seconds. */
+typedef struct {
+    float   bin[LORA_COARSE_N];
+    bool    ready;
+    uint8_t agc;        /* gain index the floor was learned at */
+    uint8_t other_agc;  /* consecutive snapshots at a different gain index */
+} lora_floor_t;
 
 /* Samples in the snapshot. */
 uint32_t lora_snapshot_len(const lora_snapshot_t *s);
 
 /* Look for LoRa in the snapshot. `work` must hold LORA_WORK_FLOATS floats.
- * Returns false only on bad arguments. */
-bool lora_scan(const lora_snapshot_t *s, float *work, size_t work_floats, lora_result_t *out);
+ * `floor` may be NULL (each snapshot judged alone); otherwise it is used
+ * and updated. Returns false only on bad arguments. */
+bool lora_scan(const lora_snapshot_t *s, float *work, size_t work_floats, lora_floor_t *floor,
+               lora_result_t *out);
 
 /* The candidate at freq_hz mixed to 0 Hz and decimated to 1.25 MS/s, as the
  * scan sees it (for logging a snapshot to check offline). Returns samples,
