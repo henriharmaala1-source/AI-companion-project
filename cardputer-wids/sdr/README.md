@@ -148,6 +148,12 @@ Cardputer doesn't enter download mode, hold **G0** while plugging in USB.
 This overwrites whatever is on the device, including the Arduino Wi-Fi
 monitor. Reflash that sketch to go back.
 
+**No Python? Flash from the browser.** Espressif's esptool-js demo page,
+<https://espressif.github.io/esptool-js/>, worked for this image on a
+Cardputer (Chrome or Edge, Web Serial). Connect in download mode, set the
+flash address to `0x0`, choose `cardputer-elrs-watch.bin`, and press
+**Program** (there is no button called "Flash").
+
 ## Run the host tests
 
 ```sh
