@@ -8,6 +8,48 @@ Newest at the top.
 
 ---
 
+## Detection lost on hardware: the S3 FFT and a 4-byte-aligned heap buffer
+
+**Symptom.** After the "software range" update, the Cardputer stopped
+detecting a controller 2 m away. The `lora` log showed `"cands":0` in every
+line: the chirp detector never found a channel worth dechirping. The
+spectrum frames in the same log showed the ELRS hops clearly, 0.9 MHz wide
+and up to 48 dB above the noise, at 2405, 2426, 2430, 2455 and 2481 MHz. The
+transmitter was fine. An "old" image also failed, but it showed `33 snaps`,
+and the history of the firmware that detected at 100–200 m holds only 32.
+So that image was already a later build.
+
+**Cause (probable; not proven on the device).**
+- On the S3, `lora_detect` runs its FFTs through esp-dsp's assembly routine,
+  which loads data in 64-bit pairs (`ee.ldf.64.ip`).
+- The FFT buffer is the spectrum sink's RAM, from `heap_caps_malloc`.
+  ESP-IDF's allocator only promises 4-byte alignment (TLSF,
+  `ALIGN_SIZE_LOG2 = 2`).
+- The sink is allocated right after `app_t`. That struct grew by 4 bytes
+  (the fixed-gain setting), then by 8 more (empty-frame count, filter
+  setting).
+- An 8-byte-aligned buffer would have become 4 mod 8. The routine then reads
+  shifted float pairs, every spectrum is garbage, and no channel ever stands
+  out.
+- The firmware that worked had simply landed on an aligned address.
+- Neither the host tests nor the simulator could see this: they use the
+  plain-C FFT.
+
+**Fix.**
+- `lora_scan()` aligns its work area to 16 bytes itself (`LORA_WORK_FLOATS`
+  has 4 floats of slack for it).
+- `fft()` falls back to the plain-C FFT if handed a misaligned buffer.
+- The `lora` log carries `work_mod16`, the scratch address mod 16, so the
+  next hardware run confirms or refutes this cause.
+- A host test runs the scan on a deliberately misaligned buffer.
+
+**Lesson.** A library's fast path can carry rules the portable path does
+not, and a test suite that only ever runs the portable path cannot catch
+them. Anything handed to vendor SIMD code gets explicit alignment, never
+whatever the heap happens to return.
+
+---
+
 ## Upstream review (esp-sdr e74f2a4 → f86da81): three problems on our side
 
 esp-sdr gained 48 commits in a week, all with the same ESP-IDF pin. Reading

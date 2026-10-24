@@ -2,6 +2,7 @@
 #include "lora_detect.h"
 
 #include <math.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -155,6 +156,15 @@ static bool  s_dsp_ready;
 
 static void fft(float *x, unsigned n)
 {
+    /* The S3 routine loads the data in 64-bit pairs (ee.ldf.64.ip). The heap
+     * only promises 4-byte alignment (ESP-IDF TLSF, ALIGN_SIZE_LOG2 = 2),
+     * and a misaligned buffer gave garbage spectra on hardware (BUGLOG).
+     * lora_scan() aligns its buffers; this guard keeps any other caller
+     * correct. */
+    if ((uintptr_t)x & 15u) {
+        lora_fft(x, n);
+        return;
+    }
     if (!s_dsp_ready) {
         s_dsp_ready = dsps_fft2r_init_fc32(s_twiddle, LORA_FFT_MAX) == ESP_OK;
     }
@@ -596,7 +606,10 @@ bool lora_scan(const lora_snapshot_t *s, float *work, size_t work_floats, lora_f
         return false;
     }
     memset(out, 0, sizeof(*out));
-    float *power = work;
+    /* 16-byte alignment for every buffer below: all their sizes are
+     * multiples of 4 floats, so aligning the start aligns them all. */
+    float *aligned = (float *)(((uintptr_t)work + 15u) & ~(uintptr_t)15u);
+    float *power = aligned;
     float *buf = power + LORA_COARSE_N;          /* 2 * LORA_FFT_MAX */
     float *ref = buf + 2 * LORA_FFT_MAX;         /* 2 * LORA_FFT_MAX */
     float *z = ref + 2 * LORA_FFT_MAX;           /* 2 * LORA_MAX_BASEBAND */

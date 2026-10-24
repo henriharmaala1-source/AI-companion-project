@@ -46,7 +46,8 @@ extern "C" {
 /* Scratch the caller provides (floats). The firmware lends it the empty
  * spectrum sink between slices; the heap is too small. */
 #define LORA_FIR_TAPS     96u        /* decimator stage 2, kept in the scratch */
-#define LORA_WORK_FLOATS  (LORA_COARSE_N + 2u * LORA_FFT_MAX * 2u + 2u * LORA_MAX_BASEBAND + LORA_FIR_TAPS)
+/* +4: lora_scan() aligns `work` to 16 bytes itself (the S3 FFT needs it). */
+#define LORA_WORK_FLOATS  (LORA_COARSE_N + 2u * LORA_FFT_MAX * 2u + 2u * LORA_MAX_BASEBAND + LORA_FIR_TAPS + 4u)
 
 typedef struct {
     const uint32_t *p;

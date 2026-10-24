@@ -29,7 +29,8 @@
 
 static uint32_t s_bank[UNITS][BANK];
 static uint32_t s_words[TOTAL];
-static float    s_work[LORA_WORK_FLOATS];
+static float    s_work[LORA_WORK_FLOATS + 1];   /* +1: room to test a misaligned start */
+static unsigned s_work_off;                     /* floats to offset `work` by */
 static double   s_filter_bw;   /* > 0: pass everything through an analog low-pass model */
 static lora_floor_t *s_floor;  /* non-NULL: scans keep a long-term floor, as the firmware does */
 static double   s_rf_gain = 1.0; /* receiver gain: scales signal AND analog noise, not ADC noise */
@@ -96,7 +97,7 @@ static lora_result_t run(unsigned sf, bool inv, double snr_db, double ch_hz, dou
     lora_snapshot_t snap;
     build_snapshot(&snap);
     lora_result_t r;
-    assert(lora_scan(&snap, s_work, LORA_WORK_FLOATS, s_floor, &r));
+    assert(lora_scan(&snap, s_work + s_work_off, LORA_WORK_FLOATS, s_floor, &r));
     return r;
 }
 
@@ -248,6 +249,17 @@ int main(int argc, char **argv)
 #undef HOP
     }
     s_filter_bw = 0.0;
+
+    /* The heap only promises 4-byte alignment; the S3 FFT needs more. A
+     * misaligned scratch must give the same answer (BUGLOG). */
+    printf("work buffer misaligned by 4 bytes\n");
+    {
+        s_work_off = 1;
+        const lora_result_t r = run(6, true, 15.0, ch, -1e-3, X_NONE, 0, 1.0, 9100, NULL);
+        s_work_off = 0;
+        show("SF6, work + 4 bytes", &r);
+        assert(r.detected && r.sf == 6);
+    }
 
     printf("overload: LoRa driven 4x past full scale (clips), like a TX 2 m away\n");
     {

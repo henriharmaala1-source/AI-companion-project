@@ -54,6 +54,7 @@ static struct {
     lora_result_t last_hit;          /* most recent positive scan */
     uint32_t snaps_total, hits_total, weak_total, cap_errors, scan_us_max, scan_us_last, step_us_last;
     bool     by_weak;                /* the verdict rests on agreeing weak hits only */
+    unsigned work_mod16;             /* scratch address mod 16, logged: alignment (BUGLOG) */
     float    snr_smooth, snr_ref;         /* smoothed SNR; its value when the detection began */
     bool     have_ref;
     bool     dump_requested;
@@ -154,6 +155,7 @@ void chirp_watch_step(uint64_t now_us)
     if (work == NULL || scratch_bytes < LORA_WORK_FLOATS * sizeof(float)) {
         return;   /* sink not empty: skip this pass */
     }
+    s.work_mod16 = (unsigned)((uintptr_t)work & 15u);
 
     sdr_capture_t cap;
     sdr_engine_capture(s.rate_code, CAPTURE_UNITS, &cap);
@@ -261,7 +263,7 @@ void chirp_watch_log(uint64_t now_us)
                    "\"tier\":\"%s\",\"weak\":%s,\"sf\":%u,\"slope\":%d,"
                    "\"freq_mhz\":%.2f,\"cand_db\":%.1f,\"snr_db\":%.1f,\"dbfs\":%.1f,\"agc\":%u,"
                    "\"snr_smooth\":%.1f,\"delta_db\":%.1f,"
-                   "\"cands\":%u,\"clip_pct\":%.1f,\"sf5_8\":[%s],\"scan_ms\":%.1f,"
+                   "\"cands\":%u,\"clip_pct\":%.1f,\"work_mod16\":%u,\"sf5_8\":[%s],\"scan_ms\":%.1f,"
                    "\"scan_ms_max\":%.1f,\"step_ms\":%.1f,\"snaps\":%" PRIu32 ",\"hits\":%" PRIu32
                    ",\"weak_only\":%" PRIu32 ",\"cap_err\":%" PRIu32,
                    snaps, hits, agree, now_us < s.active_until_us ? "true" : "false",
@@ -269,7 +271,7 @@ void chirp_watch_log(uint64_t now_us)
                    r->weak && !r->detected ? "true" : "false", r->sf, r->slope,
                    (double)r->freq_hz / 1e6, (double)r->cand_db, (double)r->snr_db, (double)r->level_dbfs,
                    r->agc, (double)s.snr_smooth, (double)(s.have_ref ? s.snr_smooth - s.snr_ref : 0.0f),
-                   r->candidates, (double)(100.0f * s.last.clip_frac), sfs,
+                   r->candidates, (double)(100.0f * s.last.clip_frac), s.work_mod16, sfs,
                    (double)s.scan_us_last / 1000.0, (double)s.scan_us_max / 1000.0,
                    (double)s.step_us_last / 1000.0, s.snaps_total, s.hits_total, s.weak_total, s.cap_errors);
 }
