@@ -176,7 +176,8 @@ static void draw_details(const elrs_status_t *st, const ui_info_t *info)
 
     display.setTextColor(st->state == ELRS_LIKELY ? COL_ALERT : COL_OK, COL_BG);
     display.setCursor(2, 1);
-    snprintf(line, sizeof(line), "%s  score %.2f", elrs_state_name(st->state), (double)st->score);
+    snprintf(line, sizeof(line), "%s  score %.2f  snd %s", elrs_state_name(st->state), (double)st->score,
+             info->sound ? info->sound : "?");
     display.print(line);
 
     /* activity strip: one 3 px column per ELRS channel 2400.4 + k MHz */
@@ -230,7 +231,7 @@ static void draw_details(const elrs_status_t *st, const ui_info_t *info)
     display.print(line);
     /* Key reference lives here, off the main view. */
     display.setCursor(2, 112);
-    display.print("[d]etails [c]lear [+/-]thr [t]est");
+    display.print("[d]etails [c]lear [+/-]thr [t]est [m]");
     display.setCursor(2, 124);
     display.print("[i]nv [g]AGC [;/.]gain [w]ide [r]aw");
 }

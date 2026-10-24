@@ -122,6 +122,14 @@ static void parse_line(const char *line)
         if (field(line, "snr_smooth", val, sizeof(val))) {
             s_log.lora_snr_db = strtof(val, NULL);
         }
+    } else if (strcmp(ev, "beep") == 0 && field(line, "pattern", val, sizeof(val))) {
+        s_log.beeps_detected += strcmp(val, "detected") == 0;
+        s_log.beeps_lost += strcmp(val, "lost") == 0;
+        s_log.beeps_boot += strcmp(val, "boot") == 0;
+        s_log.beeps_test += strcmp(val, "test") == 0;
+        s_log.beeps_unplayed += field(line, "played", val, sizeof(val)) && strcmp(val, "false") == 0;
+    } else if (strcmp(ev, "sound") == 0) {
+        s_log.sound_changes++;
     } else if (strcmp(ev, "boot") == 0) {
         s_log.boots++;
     } else if (strcmp(ev, "error") == 0) {

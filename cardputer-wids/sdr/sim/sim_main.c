@@ -57,6 +57,7 @@ typedef struct {
     double   detect_after_s;     /* no ELRS-LIKELY before this time */
     double   release_within_s;   /* after elrs_off_s */
     const char *need_whys[4];
+    unsigned need_sound_changes;  /* "sound" events ('m' key) the log must hold */
     float    min_delta_db;       /* > 0: the "since first" SNR change must reach this */
 } scenario_t;
 
@@ -335,10 +336,15 @@ static void sc_keys(scenario_t *s)
     key(s, 14, ';');    /* 44, shown on the main view at 15 s */
     key(s, 17, 'g');    /* back to AGC */
     key(s, 18, 'w');    /* widest analog filter */
+    key(s, 1, 'm');     /* sound: quiet */
+    key(s, 2, 'm');     /* off */
+    key(s, 2.5, 't');   /* test alert while muted: logged, not played */
+    key(s, 19, 'm');    /* back to normal */
     s->need_whys[0] = "threshold";
     s->need_whys[1] = "clear";
     s->need_whys[2] = "gain";
     s->need_whys[3] = "filter";
+    s->need_sound_changes = 3;
     shot(s, 10, "details", SHOT_DETAILS);
     shot(s, 15, "main", SHOT_NOT_DETECTED);
 }
@@ -490,10 +496,13 @@ static void check_log_health(const sim_log_t *log)
 static void check_verdicts(const scenario_t *sc, const sim_log_t *log)
 {
     const double first_any = first_likely_s(log, 0.0);
+    /* The alert sound follows the verdict: never for a false one. */
     if (!sc->expect_detect) {
         report(first_any < 0, "never ELRS DETECTED (first at %.1f s)", first_any);
+        report(log->beeps_detected == 0, "no 'detected' beep without a detection (%u)", log->beeps_detected);
         return;
     }
+    report(log->beeps_detected >= 1, "'detected' beep played with the alert (%u)", log->beeps_detected);
     report(first_any < 0 || first_any >= sc->detect_after_s,
            "no ELRS DETECTED before %.0f s (first at %.1f s)", sc->detect_after_s, first_any);
     const double first = first_likely_s(log, sc->elrs_on_s);
@@ -580,6 +589,11 @@ static int run_one(const entry_t *en, const char *outdir)
     for (unsigned i = 0; i < 4 && sc.need_whys[i]; i++) {
         report(has_why(log, sc.need_whys[i]), "log records a '%s' config change", sc.need_whys[i]);
     }
+    if (sc.need_sound_changes) {
+        report(log->sound_changes == sc.need_sound_changes, "'m' key: %u sound-level changes logged (need %u)",
+               log->sound_changes, sc.need_sound_changes);
+    }
+    report(log->beeps_boot >= 1, "boot tick played (%u 'boot' beeps)", log->beeps_boot);
     engine_notes(&sc);
     if (g_summary) {
         fclose(g_summary);

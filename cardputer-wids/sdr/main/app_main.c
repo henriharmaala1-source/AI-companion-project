@@ -29,6 +29,7 @@
 #include "freertos/task.h"
 #include "nvs_flash.h"
 
+#include "beep.h"
 #include "chirp_watch.h"
 #include "cp_keyboard.h"
 #include "elrs_detect.h"
@@ -251,6 +252,7 @@ void app_main(void)
 
     ui_init();
     cp_kb_init();
+    beep_init();
     ui_message("starting receiver...", "receive only, 2.4 GHz");
 
     s_app = heap_caps_calloc(1, sizeof(app_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
@@ -278,6 +280,7 @@ void app_main(void)
                    (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                    (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
                    (unsigned)sdr_engine_sink_capacity());
+    beep_play(BEEP_BOOT);   /* one tick: the speaker works (needs no ELRS) */
 
     const sdr_spec_cfg_t spec = {
         .rate_code = RATE_CODE, .nfft = NFFT, .frame_us = FRAME_US, .max_hold = true,
@@ -333,7 +336,10 @@ void app_main(void)
                            !cs.active ? "none" : cs.by_weak ? "weak" : "full", cs.active ? cs.sf : 0u);
             if (shown.state == ELRS_LIKELY) {
                 ui_alert();
+                beep_play(BEEP_DETECTED);   /* blocks ~0.3 s: between slices only */
                 next_ui = 0;
+            } else if (shown_prev == ELRS_LIKELY) {
+                beep_play(BEEP_LOST);
             }
             shown_prev = shown.state;
         }
@@ -393,6 +399,11 @@ void app_main(void)
             break;
         case 't':
             ui_alert();
+            beep_play(BEEP_TEST);
+            next_ui = 0;
+            break;
+        case 'm': /* sound: normal -> quiet -> off */
+            (void)beep_next_level();
             next_ui = 0;
             break;
         case 'd': /* big answer <-> detector numbers */
@@ -414,6 +425,7 @@ void app_main(void)
                 .chirp_agc = cs.agc,
                 .rx_filter_mhz = sdr_engine_rx_filter_mhz(sdr_engine_rx_filter_code()),
                 .rx_filter_wide = a->rx_filter >= 0, .chirp_clip = cs.clip_frac,
+                .sound = beep_level_name(beep_level()),
             };
             ui_update(&shown, &info);
             next_ui = now + UI_PERIOD_US;

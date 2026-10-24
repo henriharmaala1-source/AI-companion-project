@@ -48,7 +48,7 @@ INC=(-I"$HERE/shim" -I"$HERE" -I"$SDR/main" -I"$SDR/components/elrs_detect/inclu
 C_SRCS=("$SDR/main/app_main.c" "$WIDS/wids_log.c"
         "$SDR/components/elrs_detect/spc1.c" "$SDR/components/elrs_detect/elrs_detect.c"
         "$SDR/components/sdr_engine/sdr_sink.c" "$SDR/components/lora_detect/lora_detect.c"
-        "$SDR/main/chirp_watch.c" "$SDR/test/lora_synth.c"
+        "$SDR/main/chirp_watch.c" "$SDR/main/beep.c" "$HERE/sim_beep_hw.c" "$SDR/test/lora_synth.c"
         "$HERE/rf_scene.c" "$HERE/sim_engine.c" "$HERE/sim_platform.c" "$HERE/sim_main.c")
 CXX_SRCS=("$SDR/main/ui.cpp" "$HERE/sim_display.cpp")
 

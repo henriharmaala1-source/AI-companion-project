@@ -26,6 +26,7 @@ typedef struct {
     unsigned rx_filter_mhz;   /* analog filter width in force, 0 = unknown */
     bool     rx_filter_wide;  /* 'w' set the widest filter */
     float    chirp_clip;      /* last snapshot: samples at the ADC rail (0..1) */
+    const char *sound;        /* "normal", "quiet" or "off" */
     uint8_t  chirp_sf;     /* SF of the last LoRa hit, 0 = none */
     uint16_t chirp_hits, chirp_snaps; /* in the evidence window */
     uint64_t chirp_last_us;

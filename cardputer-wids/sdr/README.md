@@ -58,6 +58,10 @@ itself reports, or by holding the gain fixed (`g`, arrows).
 `g` hardware AGC ↔ fixed gain · `;` (↑) / `.` (↓) fixed gain ±4 (leaves
 AGC; starts from 40, upstream's default index; a PHY index, not dB) ·
 `w` analog filter: PHY default ↔ widest (~69 MHz), a field test (see below) ·
+`m` sound: normal → quiet → off (speaker: two rising tones when ELRS is
+detected, two falling when it is lost, one tick at boot; **not yet tried on
+hardware**, and silent on a Cardputer ADV, whose codec needs an I2C init this
+build lacks) ·
 `t` test alert · `r` log the next raw snapshot (`bb` baseband + `raw` words,
 to check the dechirp offline). A fixed gain stays on the main view until `g`
 returns to AGC.
