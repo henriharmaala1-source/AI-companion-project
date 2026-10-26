@@ -100,7 +100,7 @@ details view with the channel strip and detector numbers.
 | `main/`: app loop, M5GFX screen, NDJSON log | **compiles and links**, 0 warnings (our code builds with `-Werror`) |
 | Build files | done. Static data ends 6,816 bytes below the RF ring; app image 808 KB |
 | `components/lora_detect`: LoRa chirp detector (dechirp, SF5–SF8, both directions) | **host-tested** on synthetic SX1280-style LoRa: 0 false alarms in 180 interference cases, 50 % detection per snapshot at about −3 dB in-band SNR (weak tier about −4.5 dB), works when hard-clipped. **Works on hardware** (below) |
-| `main/chirp_watch.c`: raw snapshots between slices, evidence window, weak tier | in the simulator (17/17 scenarios). Full tier works on hardware; weak tier, adaptive rate, noise-floor profile and filter key **not yet run on hardware** |
+| `main/chirp_watch.c`: raw snapshots between slices, evidence window, weak tier | in the simulator (17/17 scenarios). **Works on hardware** since the FFT-alignment fix (BUGLOG): detection returned and the range grew (owner's report, no numbers yet). Which of the weak tier, noise floor and adaptive rate helps, and by how much, is not measured; the speaker alerts are untested |
 | `sim/`: whole-firmware simulator on a PC | **17/17 scenarios pass**, including a 10-minute crowded-band soak and core 1 falling behind. Found and fixed 4 bugs (see `../BUGLOG.md`) |
 | On hardware | Chirp detector detects a 250 Hz ExpressLRS controller (SF6, down-chirps) and clears when it is off; 100–200 m from inside a closed car. Grid detector cannot separate ELRS from clutter. See `../BUGLOG.md` |
 

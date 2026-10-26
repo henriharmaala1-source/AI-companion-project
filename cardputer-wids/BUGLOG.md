@@ -19,6 +19,14 @@ transmitter was fine. An "old" image also failed, but it showed `33 snaps`,
 and the history of the firmware that detected at 100–200 m holds only 32.
 So that image was already a later build.
 
+**Result on hardware (owner's report, no numbers yet).** With the aligned
+build, detection came back and the range was longer than with the first
+chirp build. Not recorded: the `work_mod16` value, so the alignment cause is
+still the most likely explanation, not a measured one. The range gain is the
+sum of this update's changes (1 dB candidate gate, weak tier, noise floor,
+adaptive snapshot rate); which of them contributed, and by how much, needs
+the fixed-power walk test.
+
 **Cause (probable; not proven on the device).**
 - On the S3, `lora_detect` runs its FFTs through esp-dsp's assembly routine,
   which loads data in 64-bit pairs (`ee.ldf.64.ip`).
