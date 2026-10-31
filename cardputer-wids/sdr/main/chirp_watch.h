@@ -9,7 +9,10 @@
 #define CHIRP_WATCH_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
+
+#include "lora_detect.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -30,7 +33,20 @@ typedef struct {
     float    clip_frac;       /* last snapshot: samples at the ADC rail (0..1) */
     uint8_t  hop_clusters;    /* separate 1 MHz-wide channel groups among this verdict's hits */
     bool     fixed_channel;   /* enough hits, all on ONE channel: LoRa, but not hopping like ELRS */
+    float    freq_off_mhz;    /* last hit: candidate offset from the LO, raw orientation */
 } chirp_status_t;
+
+/* Called with every snapshot after the chirp scan, while the snapshot and
+ * the scratch are still valid, so other raw-I/Q detectors share the same
+ * capture (ofdm_detect.h). Its time is not charged to the chirp duty cycle
+ * (COST_FACTOR in chirp_watch.c): it delays the next snapshot once, by its
+ * own length, and never makes chirp snapshots rarer. */
+typedef void (*chirp_snapshot_hook_t)(const lora_snapshot_t *snap, float *work, size_t work_floats,
+                                      uint64_t now_us, void *ctx);
+void chirp_watch_set_hook(chirp_snapshot_hook_t fn, void *ctx);
+
+/* The chirp scan of the snapshot the hook is looking at (or the last one). */
+const lora_result_t *chirp_watch_last_scan(void);
 
 void chirp_watch_init(unsigned rate_code);
 /* Call once per main-loop pass, after the slice has been drained. */

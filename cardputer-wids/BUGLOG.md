@@ -8,6 +8,73 @@ Newest at the top.
 
 ---
 
+## Microwave and DJI-like detectors: six flaws found before hardware
+
+New this round: `band_watch` (microwave ovens, wide occupancy, from the
+spectrum frames) and `ofdm_detect` (Wi-Fi vs LTE-like "DJI-like" OFDM by
+cyclic prefix, from the raw snapshots), plus a target list on the screen.
+None of it has met real air yet. Host probes and the simulator found these
+first:
+
+1. **The prefix drowned in its own noise.** First design: correlate the whole
+   0.46 ms snapshot with itself at the symbol length Tu. A host probe on
+   clean LTE-like OFDM at 30 dB gave a peak of 0.04, against ±0.015 at every
+   other lag. The prefix is only 6.6 % of an LTE symbol; the other 93 % adds
+   random products of the signal with itself. **Fix:** fold the products by
+   their position in the symbol period, as the classic van de Beek timing
+   estimator does. Prefix pairs then add up in 2–3 of 32 timing bins.
+2. **Narrow signals scored as OFDM.** With the fold, a 1 MHz Bluetooth-like
+   signal scored 0.22 and LoRa 0.15–0.18, above LTE at −3 dB (0.10). In the
+   10 MS/s stream they are oversampled ten times, so their sums fluctuate far
+   more than noise does. **Fix:** score how far the best window stands out
+   from the spread of the others in the same snapshot (a robust z: median and
+   MAD). Also skip slots a narrow signal fills, measured by |lag-1
+   correlation| / power: OFDM ≤ 0.50, Bluetooth/LoRa/carriers ≥ 0.73.
+3. **Wi-Fi bursts read as oven pulses.** In the simulator, an access point on
+   channel 6 overlapping 2440–2480 MHz pushed the oven's on-share to 0.7–0.84
+   and broke its 50 Hz rhythm: no detection. **Fix:** leave out bins inside
+   Wi-Fi-size runs, then test only the 10 MHz window that holds most of the
+   remaining activity. A unit test with the oven beside busy Wi-Fi and beside
+   Bluetooth hopping now holds this.
+4. **A weak link was never looked at.** One slot per snapshot, busiest first:
+   busy Wi-Fi is always "busy", so quiet slots (where a link below the
+   spectrum threshold would be) were never scanned. **Fix:** alternate
+   "busiest first" and "least recently scanned".
+5. **A strong access point showed its prefix in every slot.** The first
+   decimator summed blocks of 8 samples. Its sidelobes are only 13 dB down,
+   and a 25 dB access point gave Wi-Fi verdicts 15–30 MHz away. Positions
+   from the noisy per-slot scores were also off by one or two slots (Wi-Fi
+   is bursty). **Fix:** a third-order CIC decimator in integer arithmetic,
+   with sidelobes ~39 dB down: leakage now starts at ~35 dB (host probe).
+   Above that the AP fills the whole snapshot, which no affordable filter
+   fixes. So a target is placed from the spectrum: one per wide-activity
+   run, at its centroid, named by the OFDM verdicts of the slots inside it.
+6. **ELRS faked a DJI link.** The full simulator run: two ELRS-only scenes
+   listed "DJI-like OFDM link 2457 MHz" for a while. A LoRa chirp that only
+   partly fills a slot passes the narrowband gate. For some spreading
+   factors its delayed product is a tone that lines up with the LTE symbol
+   period (SF6: 688 kHz × 71.4 µs = 49.1 cycles), so it folds coherently. A
+   few such scans lifted one slot's mean from ~2.3 to 5.0. **Fix:** don't
+   score a slot where the chirp scan of the same snapshot found LoRa. Raise
+   the LTE-like bar to a mean ≥ 5.5 over ≥ 6 scans, and ≥ 7 for a slot with
+   no spectral activity. **Cost:** DJI-like detection now needs ~0 dB in the
+   slot instead of ~−3 dB.
+
+**Lesson.** A detector that is very sensitive in one dimension (here: any
+repetition at a given delay) needs a second, independent dimension to stay
+honest: bandwidth (the narrow gate), place (spectrum runs), and the other
+detector's knowledge (LoRa keep-out). The rule "a new label may never appear
+in a scenario without that signal" turned the simulator into the false-alarm
+test.
+
+**Not verified.** Real ovens (inverter ovens are not expected to pulse at
+50 Hz); real DJI O3/O4 numerology on 2.4 GHz (one author's measurements,
+github.com/huangjiansheng321-cloud/dji-drone-ocusync-research); the S3's
+exact 80 MS/s clock (the long LTE delay assumes it to ~0.1 %); scan time on
+the S3 (logged as `scan_ms` in the `ofdm` line).
+
+---
+
 ## Detection lost on hardware: the S3 FFT and a 4-byte-aligned heap buffer
 
 **Symptom.** After the "software range" update, the Cardputer stopped

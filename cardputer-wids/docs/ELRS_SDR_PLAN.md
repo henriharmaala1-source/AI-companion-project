@@ -265,6 +265,17 @@ signal levels: M0 still decides whether the idea works at all.
 
 ## To do
 
+- [ ] **Microwave and DJI-like detectors on real air** (written, host- and
+  simulator-tested only; BUGLOG "six flaws found before hardware"):
+  - Run a kitchen microwave 2–5 m away. Expect the `microwave` target and,
+    in the `band` log, `r` ≥ 0.45, `duty` 0.2–0.8, `cover` ~1. An inverter
+    oven may not show: note the model.
+  - Near a DJI drone/goggles on 2.4 GHz, expect a `dji_like` target. In the
+    `ofdm` log the `lte15`/`lte30` slot means should be > 5.5 near its
+    channel. Also note `scan_ms` (S3 cost) and `heap_free` at boot (the new
+    state takes ~3 KB of a ~12 KB margin).
+  - Soak: an hour at home with no DJI around must never list `dji_like`.
+
 - [ ] **Field test the receiver settings** with the upstream-review build
   (BUGLOG):
   - Note `rx_filter_mhz` at boot, which is the S3's real default filter.

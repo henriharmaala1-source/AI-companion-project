@@ -417,6 +417,20 @@ void sdr_engine_capture(unsigned rate_code, unsigned units, sdr_capture_t *out)
                 synth_gfsk(&sy, (2404.0 + 2.0 * (h % 37u)) * 1e6 - center, amp_for(e->level_db, 1e6));
             }
             break;
+        case RF_MICROWAVE: {  /* a carrier where the sweep is, if on (0.46 ms << the sweep) */
+            double mhz;
+            if (rf_mw_freq(e, t0 + dur / 2.0, &mhz)) {
+                synth_cw(&sy, mhz * 1e6 - center, amp_for(e->level_db, 1.5e6));
+            }
+            break;
+        }
+        case RF_DJI:
+            if ((h % 1000u) < (uint32_t)(e->duty * 1000.0f)) {
+                const bool k15 = e->scs_khz < 20.0f;
+                synth_ofdm_lte(&sy, e->center_mhz * 1e6 - center, amp_for(e->level_db, 9e6), k15 ? 15e3 : 30e3,
+                               k15 ? 600u : 300u);
+            }
+            break;
         }
     }
     synth_noise(&sy, CAP_NOISE_SIGMA);

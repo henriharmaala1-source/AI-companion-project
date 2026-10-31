@@ -50,6 +50,49 @@ test 5), and at the edge of range, with under 5 hits, it still can.
 In the grid detector's "other hopping" state, the line says **Bluetooth-like**
 when most narrow bursts sit on the whole-MHz grid.
 
+## Other things it recognises (shown under the ELRS answer)
+
+ELRS keeps the big red banner and the alert sound. Everything else seen at
+the same time is a line in a list (`main/targets.c`), most important first,
+and a `target` on/off event in the log. Presence and kind only, 2.4 GHz only:
+
+| Line | How | From |
+|---|---|---|
+| **DJI-like OFDM link** (orange) | LTE-like cyclic prefix (15 or 30 kHz subcarriers: 66.7 / 33.3 µs symbols) | raw snapshots |
+| **LoRa 1 channel, not ELRS** (orange) | chirps, all on one channel | raw snapshots |
+| **Bluetooth-like / other hopper** (yellow) | narrow hops off the ELRS grid | spectrum |
+| **wide signal, not Wi-Fi/DJI** (yellow) | steady wide activity, no OFDM prefix found | both |
+| **microwave oven** (cyan) | on/off locked to the 50 Hz mains, in 2440–2480 MHz | spectrum |
+| **Wi-Fi ch N** (grey) | 3.2 µs prefix (802.11a/g/n/ac, and Wi-Fi 6 beacons) | raw snapshots |
+
+- **Microwave ovens** (`components/band_detect/band_watch.c`): a household
+  oven radiates for about half of every mains cycle. Per 100 ms slice, the
+  10 MHz window with most of the narrow activity in 2440–2480 MHz must switch
+  at exactly 50 (or 60) Hz, be on 20–80 % of the time, show up in nearly
+  every cycle, and hold most of the range's activity. Wi-Fi-size runs are
+  left out (an access point overlaps the same range). Inverter ovens may not
+  pulse at the mains rate and are **not** recognised.
+- **DJI-like** (`components/band_detect/ofdm_detect.c`): each snapshot, one
+  5 MHz slot is mixed to 0 Hz and decimated to 10 MS/s (3rd-order CIC). It is
+  then multiplied by itself delayed by 3.2, 33.3 and 66.7 µs, and the
+  products are folded by position in the symbol period. A cyclic prefix
+  makes one timing window stand out. DJI's O3/O4 links are reported to use
+  LTE-like OFDM at 15 and 30 kHz (one author's measurements, linked in the
+  header). Phone networks use the same numerology, but not in this band. So
+  the label is **DJI-like**, never "DJI": other drone links could look the
+  same. Slots a narrow signal fills, or where the chirp scan saw LoRa in the
+  same snapshot, are not scored. A slot needs a running mean of ≥ 5.5 over
+  ≥ 6 scans, ~0 dB in the slot (host statistics).
+- Positions come from the spectrum: one target per wide-activity run, at its
+  centre. Two signals touching edge to edge (a DJI link right beside a Wi-Fi
+  channel) are one run and are shown at their shared centre.
+
+Logs: `band` every 2 s (oven rhythm `r`, `duty`, `cover`, passing `slices`,
+and wide occupancy per slot), `ofdm` every 2 s (slot means per kind,
+`narrow_skips`, `lora_skips`, `scan_ms`). The OFDM scan runs inside the
+snapshot step but is not charged to the chirp duty cycle, so ELRS snapshots
+are not made rarer.
+
 **Signal strength.** For each chirp detection the `lora` log carries three
 numbers:
 
@@ -94,14 +137,16 @@ The details view shows `flt <MHz>` (`W` = widest) and `clip <%>`.
 
 ## Screen
 
-The main view is only the answer: **ELRS DETECTED** (red, with a flash) or
-**NOT DETECTED** (green), plus up to three lines. With a chirp detection
-these are the SF and ELRS rate, the raw level in dBFS with its gain index,
-and the SNR with its change since the detection began (+ = closer). The key
-reference is in the details view. The line under it says which kind of "not
-detected": no hopping at all, or a hopping signal that isn't on the ELRS
-grid, such as Bluetooth. "Not detected" never means "all clear". `d` toggles a
-details view with the channel strip and detector numbers.
+ELRS detected: the red **ELRS DETECTED** banner (with a flash and two rising
+tones), why (SF and ELRS rate, or the grid), the SNR with its change since
+the detection began (+ = closer), and up to two lines of anything else seen.
+
+No ELRS: a small green **ELRS NOT DETECTED** header, then up to six lines of
+other things recognised (table above), then when ELRS was last detected and
+the fixed gain if one is set. With nothing recognised it says so: "no
+hopping signal seen on 2.4 GHz". It never says "all clear", because the
+device sees 2.4 GHz only and misses a link below the noise. `d` toggles a
+details view with the channel strip, detector numbers and the key reference.
 
 ## Status
 
@@ -111,9 +156,10 @@ details view with the channel strip and detector numbers.
 | `components/cp_keyboard`: GPIO-matrix keyboard port | written. Keymap **host-tested**, GPIO side untested |
 | `components/sdr_engine`: esp-sdr engine wrapper, RAM sink, transport overlay | **compiles and links** with the pinned IDF, 0 warnings |
 | `main/`: app loop, M5GFX screen, NDJSON log | **compiles and links**, 0 warnings (our code builds with `-Werror`) |
-| Build files | done. Static data ends 6,816 bytes below the RF ring; app image 808 KB |
+| Build files | done. Static data ends 6,048 bytes below the RF ring; app image 840 KB |
 | `components/lora_detect`: LoRa chirp detector (dechirp, SF5–SF8, both directions) | **host-tested** on synthetic SX1280-style LoRa: 0 false alarms in 180 interference cases, 50 % detection per snapshot at about −3 dB in-band SNR (weak tier about −4.5 dB), works when hard-clipped. **Works on hardware** (below) |
 | `main/chirp_watch.c`: raw snapshots between slices, evidence window, weak tier | in the simulator (17/17 scenarios). **Works on hardware** since the FFT-alignment fix (BUGLOG): detection returned and the range grew (owner's report, no numbers yet). Which of the weak tier, noise floor and adaptive rate helps, and by how much, is not measured; the speaker alerts are untested |
+| `components/band_detect`: microwave ovens, wide occupancy, Wi-Fi vs DJI-like OFDM | **host-tested** (369 checks) on synthetic signals, and in the simulator. **Not tried on real air**: no real oven, DJI link or S3 scan time yet (BUGLOG) |
 | `sim/`: whole-firmware simulator on a PC | **17/17 scenarios pass**, including a 10-minute crowded-band soak and core 1 falling behind. Found and fixed 4 bugs (see `../BUGLOG.md`) |
 | On hardware | Chirp detector detects a 250 Hz ExpressLRS controller (SF6, down-chirps) and clears when it is off; 100–200 m from inside a closed car. Grid detector cannot separate ELRS from clutter. See `../BUGLOG.md` |
 
@@ -129,11 +175,14 @@ third_party/esp-sdr   submodule, pinned e74f2a4 (GPL-3.0-or-later), never edited
 third_party/M5GFX     submodule, pinned c5a3fef (MIT)
 components/
   elrs_detect/   pure C, no IDF: spc1.c (frame decoder), elrs_detect.c
+  lora_detect/   pure C: the chirp detector
+  band_detect/   pure C: band_watch.c (ovens, wide occupancy), ofdm_detect.c
   cp_keyboard/   cp_keymap.c (pure, tested), cp_keyboard.c (driver/gpio)
   sdr_engine/    s3_rx.c (extracted from upstream receiver.c), sdr_sink.c,
                  overlay/ring_io.h (replaces upstream's USB transport)
-main/            app_main.c, ui.cpp, ui.h
-test/            run_tests.sh, test_elrs_detect.c, test_keymap.c
+main/            app_main.c, chirp_watch.c, targets.c (the list), ui.cpp, beep*.c
+test/            run_tests.sh, test_elrs_detect.c, test_lora_detect.c,
+                 test_band_detect.c, test_keymap.c, lora_synth.c (synthetic I/Q)
 sim/             host simulator: run_sim.sh, scenarios, radio model, shims
 ```
 

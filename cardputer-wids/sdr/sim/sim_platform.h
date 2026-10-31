@@ -7,6 +7,7 @@
 
 #define SIM_MAX_TRANSITIONS 256
 #define SIM_MAX_WHYS        32
+#define SIM_MAX_TARGET_KINDS 8
 
 typedef struct {
     double  t_s;
@@ -33,7 +34,18 @@ typedef struct {
     unsigned lora_fixed;               /* "lora_fixed" events with fixed:true */
     float    lora_delta_db;            /* from the last "lora" line */
     float    lora_snr_db;
+    /* "target" events, per kind name (targets.c) */
+    char     tgt_kind[SIM_MAX_TARGET_KINDS][16];
+    unsigned tgt_ons[SIM_MAX_TARGET_KINDS];      /* times it turned on */
+    int64_t  tgt_first_us[SIM_MAX_TARGET_KINDS]; /* first "on" */
+    int64_t  tgt_last_off_us[SIM_MAX_TARGET_KINDS]; /* last "off", -1 = never */
+    bool     tgt_now[SIM_MAX_TARGET_KINDS];      /* on at the end of the run */
+    char     tgt_text[SIM_MAX_TARGET_KINDS][48]; /* text of the first "on" */
+    unsigned n_tgt;
 } sim_log_t;
+
+/* Index of a target kind in the log, or -1 if it never appeared. */
+int sim_target(const sim_log_t *log, const char *kind);
 
 /* Prepare a run: console goes to `log_path`, keys fire at their times, the
  * run ends at `end_s` of virtual time. `tick` is called once per main-loop

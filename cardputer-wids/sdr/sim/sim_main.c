@@ -62,7 +62,19 @@ typedef struct {
     double   false_likely_s;      /* > 0: ELRS-LIKELY may show for this long after the first
                                    * chirp (the verdict needs 2 hits, "fixed" needs 5), never again */
     float    min_delta_db;       /* > 0: the "since first" SNR change must reach this */
+    /* Other targets (targets.c): each listed kind must turn on between its
+     * after/by times; with gone_by > 0 it must also be off by then. Kinds in
+     * k_never_unasked may never appear unless listed here or in allow. */
+    struct {
+        const char *kind;
+        double after_s, by_s, gone_by_s;
+    } need[3];
+    const char *allow[3];
 } scenario_t;
+
+/* New detectors' false alarms are what matters most: these may only show
+ * in a scenario that has them. */
+static const char *const k_never_unasked[] = { "dji_like", "microwave", "lora_fixed" };
 
 static rf_emitter_t elrs(float level, double on, double off, float packet_ms, float air_ms,
                          unsigned pph, float bw_khz, unsigned sf)
@@ -98,7 +110,35 @@ static rf_emitter_t bt_audio(float lvl, unsigned wifi_ch)
                            .wifi_channel = wifi_ch };
 }
 
+static rf_emitter_t oven(float lvl, double on, double off, float mhz, unsigned mains)
+{
+    return (rf_emitter_t){ .kind = RF_MICROWAVE, .level_db = lvl, .on_s = on, .off_s = off, .center_mhz = mhz,
+                           .sweep_mhz = 5.0f, .mains_hz = mains };
+}
+
+/* DJI-like video downlink (OcuSync-style LTE numerology, ofdm_detect.h). */
+static rf_emitter_t dji(float lvl, double on, double off, float mhz, float scs_khz)
+{
+    return (rf_emitter_t){ .kind = RF_DJI, .level_db = lvl, .on_s = on, .off_s = off, .center_mhz = mhz,
+                           .scs_khz = scs_khz, .duty = 0.95f };
+}
+
 static void add(scenario_t *s, rf_emitter_t e) { (void)rf_scene_add(&s->scene, &e); }
+
+static void need(scenario_t *s, const char *kind, double after_s, double by_s, double gone_by_s)
+{
+    for (unsigned i = 0; i < 3; i++) {
+        if (s->need[i].kind == NULL) {
+            s->need[i].kind = kind;
+            s->need[i].after_s = after_s;
+            s->need[i].by_s = by_s;
+            s->need[i].gone_by_s = gone_by_s;
+            return;
+        }
+    }
+    fprintf(stderr, "scenario needs too many targets\n");
+    exit(2);
+}
 
 /* A typical flat: a busy access point on channel 6, a neighbour's on 1, a
  * phone and a watch doing BLE. */
@@ -229,6 +269,7 @@ static void sc_lora_fixed_channel(scenario_t *s)
     add(s, e);
     s->need_lora_fixed = true;
     s->false_likely_s = 3.0;
+    s->allow[0] = "lora_fixed";
     shot(s, 59, "end", SHOT_NOT_DETECTED);
 }
 
@@ -367,6 +408,59 @@ static void sc_keys(scenario_t *s)
     shot(s, 15, "main", SHOT_NOT_DETECTED);
 }
 
+/* A household oven running 10..50 s next to Wi-Fi channel 11's range. */
+static void sc_microwave_oven(scenario_t *s)
+{
+    s->what = "Microwave oven (50 Hz) on from 10 to 50 s, home background: listed, never ELRS";
+    s->duration_s = 70;
+    home_background(s);
+    add(s, oven(30.0f, 10, 50, 2458.0f, 50));
+    need(s, "microwave", 10, 16, 58);
+    shot(s, 30, "oven", SHOT_NOT_DETECTED);
+}
+
+static void sc_dji_link(scenario_t *s)
+{
+    s->what = "DJI-like OFDM video link (15 kHz, 9 MHz) at 2462.5 MHz from 5 s: listed as DJI-like";
+    s->duration_s = 50;
+    home_background(s);
+    add(s, dji(15.0f, 5, 1e9, 2462.5f, 15.0f));
+    need(s, "dji_like", 5, 30, 0);
+    s->allow[0] = "wide";
+    shot(s, 45, "dji", SHOT_NOT_DETECTED);
+}
+
+/* 3 dB per bin: under the 8 dB "wide" threshold, so only the round-robin
+ * OFDM scan can find it. */
+static void sc_dji_weak_30k(scenario_t *s)
+{
+    s->what = "Weak DJI-like link (30 kHz, 3 dB over noise): below the spectrum threshold, found by its prefix";
+    s->duration_s = 60;
+    home_background(s);
+    add(s, dji(3.0f, 2, 1e9, 2467.5f, 30.0f));
+    need(s, "dji_like", 2, 50, 0);
+    shot(s, 59, "end", SHOT_NOT_DETECTED);
+}
+
+static void sc_everything_at_once(scenario_t *s)
+{
+    s->what = "ELRS 250 Hz + DJI-like link + microwave oven + home background: ELRS red, the others listed";
+    s->duration_s = 50;
+    home_background(s);
+    add(s, elrs_250(25.0f, 2, 1e9));
+    add(s, dji(15.0f, 2, 1e9, 2422.5f, 15.0f));
+    add(s, oven(30.0f, 2, 1e9, 2458.0f, 50));
+    s->expect_detect = true;
+    s->elrs_on_s = 2;
+    s->elrs_off_s = 1e9;
+    s->detect_within_s = 12;
+    s->detect_after_s = 2;
+    need(s, "dji_like", 2, 35, 0);
+    need(s, "microwave", 2, 12, 0);
+    s->allow[0] = "wide";
+    shot(s, 45, "all", SHOT_DETECTED);
+}
+
 typedef struct {
     const char *name;
     void (*build)(scenario_t *s);
@@ -390,6 +484,10 @@ static const entry_t k_scenarios[] = {
     { "elrs_250_below_noise", sc_elrs_250_below_noise },
     { "elrs_too_weak", sc_elrs_too_weak },
     { "inverted_then_i", sc_inverted_then_i },
+    { "microwave_oven", sc_microwave_oven },
+    { "dji_link", sc_dji_link },
+    { "dji_weak_30k", sc_dji_weak_30k },
+    { "everything_at_once", sc_everything_at_once },
     { "keys", sc_keys },
 };
 #define N_SCENARIOS (sizeof(k_scenarios) / sizeof(k_scenarios[0]))
@@ -397,15 +495,16 @@ static const entry_t k_scenarios[] = {
 /* ------------------------------------------------------------ the screen */
 
 /* What the main view is showing, read from pixels ui.cpp always paints: the
- * red banner fill (y 6..75), or three corners of the green "NOT DETECTED"
- * outline (x 4..235, y 8..73), which no text in the details view can mimic. */
+ * red banner fill (y 6..75), or the green "ELRS NOT DETECTED" header outline
+ * (x 4..235, y 2..31): its two sides at y 20 and its bottom edge, where the
+ * details view only draws its channel strip. */
 static shot_expect_t screen_shows(void)
 {
     if (sim_display_pixel(2, 16) == 0xF800 && sim_display_pixel(237, 70) == 0xF800) {
         return SHOT_DETECTED;
     }
-    if (sim_display_pixel(4, 8) == 0x07E0 && sim_display_pixel(235, 8) == 0x07E0 &&
-        sim_display_pixel(4, 73) == 0x07E0) {
+    if (sim_display_pixel(4, 20) == 0x07E0 && sim_display_pixel(235, 20) == 0x07E0 &&
+        sim_display_pixel(120, 31) == 0x07E0) {
         return SHOT_NOT_DETECTED;
     }
     return SHOT_DETAILS;
@@ -565,6 +664,44 @@ static void check_screen(const scenario_t *sc)
     }
 }
 
+static bool listed(const scenario_t *sc, const char *kind)
+{
+    for (unsigned i = 0; i < 3; i++) {
+        if ((sc->need[i].kind && strcmp(sc->need[i].kind, kind) == 0) ||
+            (sc->allow[i] && strcmp(sc->allow[i], kind) == 0)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void check_targets(const scenario_t *sc, const sim_log_t *log)
+{
+    for (unsigned i = 0; i < 3 && sc->need[i].kind; i++) {
+        const int k = sim_target(log, sc->need[i].kind);
+        const double first = k >= 0 ? log->tgt_first_us[k] / 1e6 : -1.0;
+        report(first >= sc->need[i].after_s && first <= sc->need[i].by_s,
+               "'%s' listed between %.0f and %.0f s (first at %.1f s: \"%s\")", sc->need[i].kind,
+               sc->need[i].after_s, sc->need[i].by_s, first, k >= 0 ? log->tgt_text[k] : "");
+        if (sc->need[i].gone_by_s > 0.0) {
+            report(k >= 0 && !log->tgt_now[k] && log->tgt_last_off_us[k] / 1e6 <= sc->need[i].gone_by_s,
+                   "'%s' gone by %.0f s (last off at %.1f s)", sc->need[i].kind, sc->need[i].gone_by_s,
+                   k >= 0 ? log->tgt_last_off_us[k] / 1e6 : -1.0);
+        }
+    }
+    for (unsigned j = 0; j < sizeof(k_never_unasked) / sizeof(k_never_unasked[0]); j++) {
+        if (!listed(sc, k_never_unasked[j])) {
+            const int k = sim_target(log, k_never_unasked[j]);
+            report(k < 0, "never lists '%s' (it is not in this scene; first at %.1f s)", k_never_unasked[j],
+                   k >= 0 ? log->tgt_first_us[k] / 1e6 : -1.0);
+        }
+    }
+    for (unsigned i = 0; i < log->n_tgt; i++) {
+        note("target '%s': on %u times, first at %.1f s (\"%s\")%s", log->tgt_kind[i], log->tgt_ons[i],
+             log->tgt_first_us[i] / 1e6, log->tgt_text[i], log->tgt_now[i] ? ", still on at the end" : "");
+    }
+}
+
 static void engine_notes(const scenario_t *sc)
 {
     const sim_engine_stats_t *e = sim_engine_stats();
@@ -627,6 +764,7 @@ static int run_one(const entry_t *en, const char *outdir)
                log->sound_changes, sc.need_sound_changes);
     }
     report(log->beeps_boot >= 1, "boot tick played (%u 'boot' beeps)", log->beeps_boot);
+    check_targets(&sc, log);
     if (sc.need_lora_fixed) {
         report(log->lora_fixed >= 1, "log says the LoRa is on one channel (%u 'lora_fixed' events)", log->lora_fixed);
     }

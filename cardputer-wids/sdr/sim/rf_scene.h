@@ -15,11 +15,18 @@
  *   BLE           advertising on 2402/2426/2480 MHz, data channels 2404..2478
  *                 (2 MHz grid) with channel selection algorithm #1.
  *   Wi-Fi         one 20 MHz channel: beacons every 102.4 ms plus traffic.
+ *   Microwave     a household oven: on for ~45 % of each mains cycle, sweeping
+ *                 a few MHz across the on-time (NIST oven recordings; IEEE
+ *                 802.11-98/240), ~1.5 MHz wide at any instant (an assumption).
+ *   DJI-like      continuous LTE-like OFDM, ~9 MHz wide (600 x 15 kHz or
+ *                 300 x 30 kHz subcarriers), like an OcuSync video downlink;
+ *                 the duty models its small gaps.
  *
  * Things it does NOT model, so a pass here is not proof on hardware: the
  * Cardputer's antenna and AGC, gain changes, spurs, a strong signal
  * desensitising the receiver, other SX1280 links (TBS Tracer, ImmersionRC
- * Ghost) whose channel plans are not public, microwave ovens.
+ * Ghost) whose channel plans are not public, inverter microwave ovens, DJI's
+ * frequency changes and its DroneID bursts.
  */
 #ifndef RF_SCENE_H
 #define RF_SCENE_H
@@ -29,7 +36,7 @@
 
 #define RF_MAX_EMITTERS 8
 
-typedef enum { RF_ELRS, RF_BT_CLASSIC, RF_BLE, RF_WIFI } rf_kind_t;
+typedef enum { RF_ELRS, RF_BT_CLASSIC, RF_BLE, RF_WIFI, RF_MICROWAVE, RF_DJI } rf_kind_t;
 
 typedef struct {
     rf_kind_t kind;
@@ -48,7 +55,12 @@ typedef struct {
     float    ramp_db_per_s; /* level change over time: a transmitter approaching (+) or leaving (-) */
     /* RF_WIFI */
     unsigned wifi_channel;  /* 1..13 */
-    float    duty;          /* fraction of time carrying traffic, 0..1 */
+    float    duty;          /* fraction of time carrying traffic, 0..1 (RF_DJI too) */
+    /* RF_MICROWAVE, RF_DJI */
+    float    center_mhz;
+    float    sweep_mhz;     /* oven: swept across each on-time */
+    unsigned mains_hz;      /* oven: 50 (Finland) or 60 */
+    float    scs_khz;       /* DJI-like: subcarrier spacing, 15 or 30 */
 } rf_emitter_t;
 
 typedef struct {
@@ -64,6 +76,23 @@ typedef struct {
     unsigned ffts;          /* FFTs merged into the window (max-hold) */
     bool     inverted;      /* the hardware delivers a mirrored spectrum */
 } rf_view_t;
+
+/* Oven: on-share of each mains cycle (a half-wave doubler conducts for a
+ * bit less than half the cycle). */
+#define RF_MW_ON_FRAC 0.45
+
+/* Where an oven radiates at t_us, or false while it is off this cycle. */
+static inline bool rf_mw_freq(const rf_emitter_t *e, double t_us, double *mhz)
+{
+    const double period = 1e6 / (e->mains_hz ? e->mains_hz : 50u);
+    const double ph = (t_us - e->on_s * 1e6) / period;
+    const double frac = ph - (double)(long long)ph;
+    if (frac >= RF_MW_ON_FRAC) {
+        return false;
+    }
+    *mhz = e->center_mhz - e->sweep_mhz / 2.0 + e->sweep_mhz * frac / RF_MW_ON_FRAC;
+    return true;
+}
 
 /* Level at time t_us (on_s is where the ramp starts). */
 static inline float rf_level_at(const rf_emitter_t *e, double t_us)

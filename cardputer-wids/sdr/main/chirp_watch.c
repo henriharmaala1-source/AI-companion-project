@@ -65,6 +65,8 @@ static struct {
     float    snr_smooth, snr_ref;         /* smoothed SNR; its value when the detection began */
     bool     have_ref;
     bool     dump_requested;
+    chirp_snapshot_hook_t hook;
+    void    *hook_ctx;
 } s;
 
 const char *chirp_elrs_rate(uint8_t sf)
@@ -80,11 +82,23 @@ const char *chirp_elrs_rate(uint8_t sf)
 
 void chirp_watch_init(unsigned rate_code)
 {
+    const chirp_snapshot_hook_t hook = s.hook;   /* survives a re-init */
+    void *ctx = s.hook_ctx;
     memset(&s, 0, sizeof(s));
     s.rate_code = rate_code;
+    s.hook = hook;
+    s.hook_ctx = ctx;
 }
 
 void chirp_watch_request_dump(void) { s.dump_requested = true; }
+
+const lora_result_t *chirp_watch_last_scan(void) { return &s.last; }
+
+void chirp_watch_set_hook(chirp_snapshot_hook_t fn, void *ctx)
+{
+    s.hook = fn;
+    s.hook_ctx = ctx;
+}
 void chirp_watch_reset_floor(void) { memset(&s.floor, 0, sizeof(s.floor)); }
 
 /* ------------------------------------------------------------ dump */
@@ -262,8 +276,12 @@ void chirp_watch_step(uint64_t now_us)
         s.dump_requested = false;
         dump(&snap, work, &res);
     }
+    const int64_t t_chirp = esp_timer_get_time();
+    if (s.hook) {
+        s.hook(&snap, work, scratch_bytes / sizeof(float), now_us, s.hook_ctx);
+    }
     const int64_t t_end = esp_timer_get_time();
-    s.step_us_last = (uint32_t)(t_end - t_step);
+    s.step_us_last = (uint32_t)(t_chirp - t_step);
     s.next_us = (uint64_t)t_end + COST_FACTOR * (uint64_t)s.step_us_last;
 }
 
@@ -287,6 +305,7 @@ void chirp_watch_status(uint64_t now_us, chirp_status_t *out)
     const unsigned clusters = window_clusters(now_us, s.last_hit.sf, &lhits);
     out->hop_clusters = (uint8_t)(clusters > 255u ? 255u : clusters);
     out->fixed_channel = out->active && lhits >= FIXED_MIN_HITS && clusters == 1u;
+    out->freq_off_mhz = s.last_hit.freq_hz / 1e6f;
 }
 
 void chirp_watch_log(uint64_t now_us)

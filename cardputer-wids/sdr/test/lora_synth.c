@@ -113,27 +113,123 @@ void synth_gfsk(synth_t *s, double f_hz, double amp)
     }
 }
 
+/* 802.11a/g symbols: 0.8 us cyclic prefix + 3.2 us useful part. Each
+ * subcarrier's phase is measured from the start of the useful part, so the
+ * prefix is an exact copy of the symbol's last 0.8 us, as on the air. */
 void synth_ofdm(synth_t *s, double f_hz, double amp)
 {
-    const unsigned sym = (unsigned)(SYNTH_FS * 4e-6);
+    const unsigned sym = (unsigned)(SYNTH_FS * 4e-6), cp = (unsigned)(SYNTH_FS * 0.8e-6);
+    const unsigned start = rnd(s) % sym;   /* the snapshot begins anywhere in a symbol */
     double ai[52], aq[52];
     for (uint32_t n = 0; n < s->n; n++) {
-        if (n % sym == 0) {
+        const unsigned pos = (n + start) % sym;
+        if (pos == 0 || n == 0) {
             for (unsigned c = 0; c < 52; c++) {
                 ai[c] = (rnd(s) & 1u) ? 1.0 : -1.0;
                 aq[c] = (rnd(s) & 1u) ? 1.0 : -1.0;
             }
         }
+        const double tau = ((double)pos - (double)cp) / SYNTH_FS;
+        const double carrier = 2.0 * PI * f_hz * (double)n / SYNTH_FS;
         double re = 0.0, im = 0.0;
         for (unsigned c = 0; c < 52; c++) {
             const int k = (int)c - 26 + (c >= 26 ? 1 : 0);  /* skip DC subcarrier */
-            const double p = 2.0 * PI * (f_hz + k * 312500.0) * (double)n / SYNTH_FS;
+            const double p = carrier + 2.0 * PI * k * 312500.0 * tau;
             re += ai[c] * cos(p) - aq[c] * sin(p);
             im += ai[c] * sin(p) + aq[c] * cos(p);
         }
         s->i[n] += amp * re / sqrt(104.0);
         s->q[n] += amp * im / sqrt(104.0);
     }
+}
+
+/* In-place radix-2 FFT, double, sign -1 forward / +1 inverse (unscaled). */
+static void fft_d(double *re, double *im, unsigned n, int sign)
+{
+    for (unsigned i = 1, j = 0; i < n; i++) {
+        unsigned bit = n >> 1;
+        for (; j & bit; bit >>= 1) {
+            j ^= bit;
+        }
+        j ^= bit;
+        if (i < j) {
+            double t = re[i]; re[i] = re[j]; re[j] = t;
+            t = im[i]; im[i] = im[j]; im[j] = t;
+        }
+    }
+    for (unsigned len = 2; len <= n; len <<= 1) {
+        const double a = sign * 2.0 * PI / len;
+        for (unsigned i = 0; i < n; i += len) {
+            for (unsigned k = 0; k < len / 2; k++) {
+                const double wr = cos(a * k), wi = sin(a * k);
+                const unsigned u = i + k, v = i + k + len / 2;
+                const double xr = re[v] * wr - im[v] * wi, xi = re[v] * wi + im[v] * wr;
+                re[v] = re[u] - xr;
+                im[v] = im[u] - xi;
+                re[u] += xr;
+                im[u] += xi;
+            }
+        }
+    }
+}
+
+/* LTE-like OFDM: n_sc QPSK subcarriers at scs_hz, built exactly as LTE does
+ * at 15.36 MS/s (IFFT of 15.36 MHz / scs points, normal cyclic prefix of
+ * 144/2048 of the IFFT), then resampled to 80 MS/s by linear interpolation.
+ * Interpolation keeps the prefix an exact copy: a point and its copy one
+ * IFFT later fall at the same fraction between baseband samples. */
+void synth_ofdm_lte(synth_t *s, double f_hz, double amp, double scs_hz, unsigned n_sc)
+{
+    const double fb = 15.36e6;
+    const unsigned N = (unsigned)lrint(fb / scs_hz);       /* 1024 at 15 kHz, 512 at 30 kHz */
+    const unsigned cp = N * 144u / 2048u;                  /* 72 / 36 */
+    if (N < 64 || (N & (N - 1)) != 0 || n_sc >= N) {
+        return;
+    }
+    const double dur = (double)s->n / SYNTH_FS;
+    const unsigned need = (unsigned)(dur * fb) + N + cp + 4u;  /* + a symbol: random start */
+    const unsigned nsym = need / (N + cp) + 2u;
+    const unsigned total = nsym * (N + cp);
+    double *bb_re = calloc(total, sizeof(double)), *bb_im = calloc(total, sizeof(double));
+    double *fr = calloc(N, sizeof(double)), *fi = calloc(N, sizeof(double));
+    if (bb_re == NULL || bb_im == NULL || fr == NULL || fi == NULL) {
+        free(bb_re); free(bb_im); free(fr); free(fi);
+        return;
+    }
+    for (unsigned y = 0; y < nsym; y++) {
+        memset(fr, 0, N * sizeof(double));
+        memset(fi, 0, N * sizeof(double));
+        for (unsigned c = 0; c < n_sc; c++) {
+            const int k = (int)c - (int)n_sc / 2 + (c >= n_sc / 2 ? 1 : 0);   /* no DC subcarrier */
+            const unsigned b = k >= 0 ? (unsigned)k : (unsigned)((int)N + k);
+            fr[b] = (rnd(s) & 1u) ? 1.0 : -1.0;
+            fi[b] = (rnd(s) & 1u) ? 1.0 : -1.0;
+        }
+        fft_d(fr, fi, N, +1);
+        double *dr = bb_re + y * (N + cp), *di = bb_im + y * (N + cp);
+        for (unsigned j = 0; j < cp; j++) {
+            dr[j] = fr[N - cp + j];
+            di[j] = fi[N - cp + j];
+        }
+        memcpy(dr + cp, fr, N * sizeof(double));
+        memcpy(di + cp, fi, N * sizeof(double));
+    }
+    const double scale = amp / sqrt(2.0 * n_sc);
+    const double t_off = unit(s) * (double)(N + cp);   /* baseband samples: start anywhere */
+    for (uint32_t n = 0; n < s->n; n++) {
+        const double tb = t_off + (double)n * fb / SYNTH_FS;
+        const unsigned i0 = (unsigned)tb;
+        const double a = tb - i0;
+        if (i0 + 1 >= total) {
+            break;
+        }
+        const double xr = (1.0 - a) * bb_re[i0] + a * bb_re[i0 + 1];
+        const double xi = (1.0 - a) * bb_im[i0] + a * bb_im[i0 + 1];
+        const double p = 2.0 * PI * f_hz * (double)n / SYNTH_FS;
+        s->i[n] += scale * (xr * cos(p) - xi * sin(p));
+        s->q[n] += scale * (xr * sin(p) + xi * cos(p));
+    }
+    free(bb_re); free(bb_im); free(fr); free(fi);
 }
 
 void synth_cw(synth_t *s, double f_hz, double amp)

@@ -6,7 +6,9 @@
  *          down-chirps, then data symbols (cyclically shifted up-chirps).
  *          Inverted IQ conjugates everything (ExpressLRS invertIQ).
  *   GFSK   Bluetooth-like: 1 Mbit/s, +-160 kHz deviation, smoothed.
- *   OFDM   Wi-Fi-like: 52 subcarriers at 312.5 kHz, 4 us symbols, QPSK.
+ *   OFDM   Wi-Fi-like: 52 subcarriers at 312.5 kHz, 4 us symbols (0.8 us
+ *          cyclic prefix), QPSK. LTE-like: 15/30 kHz subcarriers, normal
+ *          cyclic prefix (DJI OcuSync-style video links).
  *   CW     a pure carrier.
  * Output is quantised to the S3's signed 10-bit I/Q, clipped like an ADC,
  * and packed into esp-sdr ring words (I bits 0..9, Q bits 10..19).
@@ -35,6 +37,9 @@ void synth_lora(synth_t *s, unsigned sf, bool invert_iq, double f_hz, double amp
                 unsigned payload_symbols);
 void synth_gfsk(synth_t *s, double f_hz, double amp);
 void synth_ofdm(synth_t *s, double f_hz, double amp);
+/* LTE-like OFDM (DJI OcuSync-style): n_sc QPSK subcarriers spaced scs_hz
+ * (15e3 or 30e3), normal cyclic prefix, continuous. */
+void synth_ofdm_lte(synth_t *s, double f_hz, double amp, double scs_hz, unsigned n_sc);
 void synth_cw(synth_t *s, double f_hz, double amp);
 void synth_noise(synth_t *s, double sigma);
 /* Low-pass everything so far to bw_hz (two-sided), then add ADC noise. */

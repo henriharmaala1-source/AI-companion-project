@@ -130,6 +130,26 @@ static void parse_line(const char *line)
         s_log.beeps_unplayed += field(line, "played", val, sizeof(val)) && strcmp(val, "false") == 0;
     } else if (strcmp(ev, "lora_fixed") == 0) {
         s_log.lora_fixed += field(line, "fixed", val, sizeof(val)) && strcmp(val, "true") == 0;
+    } else if (strcmp(ev, "target") == 0 && field(line, "kind", val, sizeof(val))) {
+        int k = sim_target(&s_log, val);
+        if (k < 0 && s_log.n_tgt < SIM_MAX_TARGET_KINDS) {
+            k = (int)s_log.n_tgt++;
+            strncpy(s_log.tgt_kind[k], val, sizeof(s_log.tgt_kind[k]) - 1);   /* kind names are short */
+            s_log.tgt_first_us[k] = -1;
+            s_log.tgt_last_off_us[k] = -1;
+        }
+        if (k >= 0 && field(line, "state", val, sizeof(val))) {
+            const bool on = strcmp(val, "on") == 0;
+            s_log.tgt_now[k] = on;
+            if (on) {
+                if (s_log.tgt_ons[k]++ == 0) {
+                    s_log.tgt_first_us[k] = t;
+                    (void)field(line, "text", s_log.tgt_text[k], sizeof(s_log.tgt_text[k]));
+                }
+            } else {
+                s_log.tgt_last_off_us[k] = t;
+            }
+        }
     } else if (strcmp(ev, "sound") == 0) {
         s_log.sound_changes++;
     } else if (strcmp(ev, "boot") == 0) {
@@ -198,6 +218,16 @@ void sim_platform_run(void (*entry)(void))
 }
 
 const sim_log_t *sim_platform_log(void) { return &s_log; }
+
+int sim_target(const sim_log_t *log, const char *kind)
+{
+    for (unsigned i = 0; i < log->n_tgt; i++) {
+        if (strcmp(log->tgt_kind[i], kind) == 0) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
 
 int sim_state_at(const sim_log_t *log, double t_s)
 {

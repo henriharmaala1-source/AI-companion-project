@@ -13,10 +13,16 @@
  * ELRS holds each channel for 2-40 ms and revisits every channel once per 80
  * hops, so the gaps cost detection latency, not detection.
  *
+ * Besides ELRS, the same frames and snapshots feed band_watch (microwave
+ * ovens, wide signals) and ofdm_detect (Wi-Fi vs DJI-like OFDM); targets.c
+ * turns those into the list under the ELRS answer. ELRS alone gets the red
+ * banner and the alert sound.
+ *
  * Log lines are NDJSON in the same shape as the Wi-Fi monitor
  * ({"t":<us since boot>,"ev":...}) on the USB Serial/JTAG port.
  */
 #include <inttypes.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,12 +35,15 @@
 #include "freertos/task.h"
 #include "nvs_flash.h"
 
+#include "band_watch.h"
 #include "beep.h"
 #include "chirp_watch.h"
 #include "cp_keyboard.h"
 #include "elrs_detect.h"
+#include "ofdm_detect.h"
 #include "sdr_engine.h"
 #include "spc1.h"
+#include "targets.h"
 #include "ui.h"
 #include "wids_log.h"
 
@@ -64,6 +73,13 @@ _Static_assert((SLICE_MS * 1000u / FRAME_US + 2u) * SDR_FRAME_BYTES(NFFT) <= SDR
  * no table). 40 is upstream's default fixed index (s3_rx.c). */
 #define GAIN_DEFAULT      40
 #define GAIN_STEP         4
+/* OFDM: a slot counts as "wide" (scanned first) above this occupancy; one
+ * slot per snapshot keeps the scan short (it adds to every snapshot). */
+#define WIDE_DUTY_MIN     0.05f
+#define OFDM_SLOTS_PER_SNAP 1u
+/* A slot the chirp scan of the same snapshot found LoRa in is not scored:
+ * part of a LoRa chirp can mimic an LTE prefix (ofdm_detect.c). */
+#define LORA_KEEP_OUT_MHZ 4.0f
 
 typedef struct {
     elrs_detector_t det;
@@ -85,6 +101,15 @@ typedef struct {
     int             gain_fixed;    /* last fixed index: where 'g' and the arrows resume */
     uint32_t        empty_frames;  /* frames with no FFT in them, since the last "diag" */
     int             rx_filter;     /* -1: PHY default; else capacitor code ('w') */
+    band_config_t   band_cfg;
+    band_watch_t    band;          /* microwave ovens, wide occupancy (frames) */
+    ofdm_watch_t    ofdm;          /* Wi-Fi / DJI-like OFDM (snapshots) */
+    ofdm_result_t   ofdm_last;
+    uint32_t        ofdm_lora_skips;   /* slots not scored: LoRa in the same snapshot */
+    unsigned        ofdm_last_slot;
+    ui_target_t     targets[UI_MAX_TARGETS];
+    unsigned        n_targets;
+    bool            tgt_on[TGT_KINDS];
 } app_t;
 
 static app_t *s_app; /* heap, not BSS: static data must end below the RF ring */
@@ -114,6 +139,7 @@ static void on_frame(const spc1_frame_t *f, void *ctx)
     const uint64_t t_us = (uint64_t)a->slice_start_us + f->pair_index * 1000000ull / a->fs_hz;
     const uint32_t dur_us = (uint32_t)((uint64_t)f->pairs * 1000000ull / a->fs_hz);
     elrs_push_frame(&a->det, f->codes, f->bins, f->db_step, t_us, dur_us);
+    band_push_frame(&a->band, f->codes, f->bins, f->db_step, t_us, dur_us);
 
     if (!a->gain_seen || f->gain < a->gain_lo) {
         a->gain_lo = f->gain;
@@ -149,11 +175,45 @@ static void drain_sink(app_t *a)
     }
 }
 
+/* ------------------------------------------------------------ OFDM */
+
+/* chirp_watch hook: score one 5 MHz slot of the same snapshot for Wi-Fi and
+ * LTE-like (DJI-style) OFDM. Wide slots first, then the rest in turn. */
+static void on_snapshot(const lora_snapshot_t *snap, float *work, size_t work_floats, uint64_t now_us, void *ctx)
+{
+    app_t *a = ctx;
+    float duty[OFDM_SLOTS];
+    for (unsigned k = 0; k < OFDM_SLOTS; k++) {
+        duty[k] = band_wide_duty(&a->band, ofdm_slot_off_mhz(k), 2.5f);
+    }
+    unsigned slots[OFDM_SLOTS_PER_SNAP];
+    const unsigned n = ofdm_watch_pick(&a->ofdm, duty, WIDE_DUTY_MIN, OFDM_SLOTS_PER_SNAP, slots);
+    const lora_result_t *lr = chirp_watch_last_scan();
+    const bool lora = lr->weak || lr->detected;
+    const int64_t t0 = esp_timer_get_time();
+    for (unsigned i = 0; i < n; i++) {
+        if (lora && fabsf(lr->freq_hz / 1e6f - ofdm_slot_off_mhz(slots[i])) < LORA_KEEP_OUT_MHZ) {
+            a->ofdm_lora_skips++;
+            continue;
+        }
+        ofdm_result_t r;
+        if (ofdm_scan(snap, ofdm_slot_off_mhz(slots[i]) * 1e6f, work, work_floats, &r)) {
+            ofdm_watch_update(&a->ofdm, slots[i], &r, now_us);
+            a->ofdm_last = r;
+            a->ofdm_last_slot = slots[i];
+        }
+    }
+    a->ofdm.scan_us_last = (uint32_t)(esp_timer_get_time() - t0);
+}
+
 /* ------------------------------------------------------------ helpers */
 
 static void restart_detector(app_t *a, const char *why)
 {
     elrs_init(&a->det, &a->cfg);
+    a->band_cfg.invert = a->cfg.invert;
+    band_init(&a->band, &a->band_cfg);
+    ofdm_watch_init(&a->ofdm);
     chirp_watch_reset_floor();   /* levels move with gain and filter */
     wids_log_event("elrs_config",
                    "\"why\":\"%s\",\"center_khz\":%" PRIu32 ",\"fs\":%" PRIu32
@@ -221,6 +281,74 @@ static void log_peak_frame(app_t *a)
     a->peak_max = 0;
 }
 
+/* Microwave rhythm and wide occupancy ("band"), OFDM slot means ("ofdm"). */
+static void log_band(app_t *a, uint64_t now_us)
+{
+    band_mw_t mw;
+    band_microwave(&a->band, now_us, &mw);
+    char duty[96], wifi[96], l15[96], l30[96];
+    size_t wd = 0, ww = 0, w15 = 0, w30 = 0;
+    for (unsigned k = 0; k < OFDM_SLOTS; k++) {
+        const ofdm_slot_t *sl = &a->ofdm.slot[k];
+        const char *sep = k ? "," : "";
+        const int n0 = snprintf(duty + wd, sizeof(duty) - wd, "%s%.2f", sep,
+                                (double)band_wide_duty(&a->band, ofdm_slot_off_mhz(k), 2.5f));
+        const int n1 = snprintf(wifi + ww, sizeof(wifi) - ww, "%s%.1f", sep, (double)sl->avg[OFDM_WIFI]);
+        const int n2 = snprintf(l15 + w15, sizeof(l15) - w15, "%s%.1f", sep, (double)sl->avg[OFDM_LTE15]);
+        const int n3 = snprintf(l30 + w30, sizeof(l30) - w30, "%s%.1f", sep, (double)sl->avg[OFDM_LTE30]);
+        if (n0 < 0 || n1 < 0 || n2 < 0 || n3 < 0) {
+            return;
+        }
+        wd = wd + (size_t)n0 < sizeof(duty) ? wd + (size_t)n0 : sizeof(duty) - 1;
+        ww = ww + (size_t)n1 < sizeof(wifi) ? ww + (size_t)n1 : sizeof(wifi) - 1;
+        w15 = w15 + (size_t)n2 < sizeof(l15) ? w15 + (size_t)n2 : sizeof(l15) - 1;
+        w30 = w30 + (size_t)n3 < sizeof(l30) ? w30 + (size_t)n3 : sizeof(l30) - 1;
+    }
+    wids_log_event("band",
+                   "\"mw\":%s,\"mw_mhz\":%.1f,\"mains\":%u,\"r\":%.2f,\"duty\":%.2f,\"stable\":%.2f,"
+                   "\"cover\":%.2f,\"width_mhz\":%.1f,\"passes\":%u,\"slices\":%u,\"wide\":[%s],"
+                   "\"band\":\"2.4GHz-only\"",
+                   mw.active ? "true" : "false", (double)mw.rf_mhz, mw.mains_hz, (double)mw.r, (double)mw.duty,
+                   (double)mw.stable, (double)mw.cover, (double)mw.width_mhz, mw.passes, mw.slices, duty);
+    const ofdm_result_t *r = &a->ofdm_last;
+    wids_log_event("ofdm",
+                   "\"slot0_mhz\":%.0f,\"step_mhz\":%d,\"wifi\":[%s],\"lte15\":[%s],\"lte30\":[%s],"
+                   "\"scans\":%" PRIu32 ",\"narrow_skips\":%" PRIu32 ",\"lora_skips\":%" PRIu32 ",\"last_slot\":%u,\"last\":[%.1f,%.1f,%.1f],"
+                   "\"last_narrow\":%.2f,\"scan_ms\":%.1f",
+                   (double)band_rf_mhz(&a->band, ofdm_slot_off_mhz(0)),
+                   a->cfg.invert ? -OFDM_SLOT_STEP_KHZ / 1000 : OFDM_SLOT_STEP_KHZ / 1000, wifi, l15, l30,
+                   a->ofdm.scans_total, a->ofdm.narrow_skips, a->ofdm_lora_skips, a->ofdm_last_slot, (double)r->score[OFDM_WIFI],
+                   (double)r->score[OFDM_LTE15], (double)r->score[OFDM_LTE30], (double)r->narrow,
+                   (double)a->ofdm.scan_us_last / 1000.0);
+}
+
+/* Rebuild the list of other things seen; log each kind turning on or off. */
+static void update_targets(app_t *a, const elrs_status_t *st, bool elrs_shown, const chirp_status_t *cs,
+                           uint64_t now_us)
+{
+    band_mw_t mw;
+    band_microwave(&a->band, now_us, &mw);
+    const target_inputs_t in = {
+        .elrs = st, .elrs_shown = elrs_shown, .chirp = cs, .band = &a->band, .mw = &mw, .ofdm = &a->ofdm,
+        .now_us = now_us,
+    };
+    a->n_targets = targets_build(&in, a->targets, UI_MAX_TARGETS);
+    for (unsigned k = 0; k < TGT_KINDS; k++) {
+        const ui_target_t *first = NULL;
+        for (unsigned i = 0; i < a->n_targets && first == NULL; i++) {
+            first = a->targets[i].kind == k ? &a->targets[i] : NULL;
+        }
+        const bool on = first != NULL;
+        if (on != a->tgt_on[k]) {
+            wids_log_event("target", "\"kind\":\"%s\",\"state\":\"%s\",\"mhz\":%.1f,\"text\":\"%s\","
+                           "\"band\":\"2.4GHz-only\"",
+                           target_kind_name((target_kind_t)k), on ? "on" : "off", on ? (double)first->mhz : 0.0,
+                           on ? first->text : "");
+            a->tgt_on[k] = on;
+        }
+    }
+}
+
 static void fatal(const char *a, const char *b)
 {
     ui_message(a, b);
@@ -269,7 +397,9 @@ void app_main(void)
     }
     a->fs_hz = sdr_engine_rate_hz(RATE_CODE);
     chirp_watch_init(RATE_CODE);
+    chirp_watch_set_hook(on_snapshot, a);
     elrs_default_config(&a->cfg, CENTER_MHZ * 1000u, a->fs_hz);
+    band_default_config(&a->band_cfg, CENTER_MHZ * 1000u, a->fs_hz, a->cfg.usable_khz);
     spc1_init(&a->dec, on_frame, a);
     restart_detector(a, "boot");
 
@@ -300,6 +430,7 @@ void app_main(void)
         a->slice_start_us = esp_timer_get_time();
         sdr_engine_run_slice(&spec, slice_ms, &r);  /* interrupts masked in here */
         drain_sink(a);
+        band_slice_done(&a->band, (uint64_t)esp_timer_get_time());
         drops_total += r.drops;
 
         if (r.status != 0) {
@@ -355,6 +486,7 @@ void app_main(void)
         if (shown.state == ELRS_LIKELY) {
             last_detected_us = (uint64_t)now;
         }
+        update_targets(a, &st, shown.state == ELRS_LIKELY, &cs, (uint64_t)now);
 
         const uint8_t key = cp_kb_poll();
         switch (key) {
@@ -436,6 +568,7 @@ void app_main(void)
                 .rx_filter_mhz = sdr_engine_rx_filter_mhz(sdr_engine_rx_filter_code()),
                 .rx_filter_wide = a->rx_filter >= 0, .chirp_clip = cs.clip_frac,
                 .sound = beep_level_name(beep_level()),
+                .targets = a->targets, .n_targets = a->n_targets,
             };
             ui_update(&shown, &info);
             next_ui = now + UI_PERIOD_US;
@@ -452,6 +585,7 @@ void app_main(void)
         if (now >= next_diag) {
             log_diag(a, &st);
             chirp_watch_log((uint64_t)now);
+            log_band(a, (uint64_t)now);
             next_diag = now + DIAG_PERIOD_US;
         }
         if (now >= next_frame) {

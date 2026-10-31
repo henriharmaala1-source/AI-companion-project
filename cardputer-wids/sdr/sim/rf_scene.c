@@ -269,6 +269,35 @@ static void wifi_render(render_t *r, const rf_emitter_t *e, double start, double
     }
 }
 
+/* Oven: the sweep position at the middle of the overlap, widened by how far
+ * it moves inside the window. */
+static void mw_render(render_t *r, const rf_emitter_t *e, double lo, double hi)
+{
+    const double step = 25.0;   /* us: fine enough for a 154 us window */
+    double f_lo = 1e9, f_hi = -1e9;
+    for (double t = lo; t < hi; t += step) {
+        double mhz;
+        if (rf_mw_freq(e, t, &mhz)) {
+            f_lo = mhz < f_lo ? mhz : f_lo;
+            f_hi = mhz > f_hi ? mhz : f_hi;
+        }
+    }
+    if (f_hi >= f_lo) {
+        add_tx(r, 500.0 * (f_lo + f_hi), 1500.0 + 1000.0 * (f_hi - f_lo), e->level_db + jitter_db(21, (uint64_t)lo));
+    }
+}
+
+/* DJI-like: continuous, each 1 ms slot on with probability `duty`. */
+static void dji_render(render_t *r, const rf_emitter_t *e, double start, double lo, double hi)
+{
+    double s0 = floor((lo - start) / 1000.0);
+    for (double s = s0 < 0 ? 0 : s0; start + s * 1000.0 < hi; s += 1.0) {
+        if (hash_unit(31, (uint32_t)s) < e->duty) {
+            add_tx(r, 1000.0 * e->center_mhz, 9000.0, e->level_db + jitter_db(32, (uint64_t)s) * 0.5);
+        }
+    }
+}
+
 static void emitter_render(render_t *r, const rf_emitter_t *e, const uint8_t *seq, double t0, double t1)
 {
     const double start = e->on_s * 1e6, end = e->off_s * 1e6;
@@ -290,6 +319,12 @@ static void emitter_render(render_t *r, const rf_emitter_t *e, const uint8_t *se
         break;
     case RF_WIFI:
         wifi_render(r, e, start, lo, hi);
+        break;
+    case RF_MICROWAVE:
+        mw_render(r, e, lo, hi);
+        break;
+    case RF_DJI:
+        dji_render(r, e, start, lo, hi);
         break;
     }
 }

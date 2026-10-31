@@ -10,6 +10,22 @@
 extern "C" {
 #endif
 
+/* One line in the list of other things seen (targets.c builds them). */
+#define UI_MAX_TARGETS  8u
+#define UI_TARGET_TEXT  39u     /* 38 characters fit beside the colour mark */
+typedef enum {
+    UI_LVL_DIM = 0,    /* everyday (Wi-Fi) */
+    UI_LVL_INFO,       /* harmless but worth knowing (microwave oven) */
+    UI_LVL_NOTE,       /* unidentified activity (other hoppers, wide signals) */
+    UI_LVL_WARN,       /* a radio link worth a look (DJI-like video, fixed LoRa) */
+} ui_level_t;
+typedef struct {
+    uint8_t kind;      /* target_kind_t */
+    uint8_t level;     /* ui_level_t */
+    float   mhz;       /* RF, 0 if unknown */
+    char    text[UI_TARGET_TEXT];
+} ui_target_t;
+
 typedef struct {
     unsigned center_mhz;
     unsigned span_mhz;
@@ -37,6 +53,8 @@ typedef struct {
     float    chirp_dbfs;      /* last hit, raw level re ADC full scale */
     uint8_t  chirp_agc;       /* gain index for that level */
     uint64_t last_detected_us;  /* last time the screen said DETECTED, 0 = never */
+    const ui_target_t *targets; /* other things seen, most important first */
+    unsigned n_targets;
 } ui_info_t;
 
 void ui_init(void);

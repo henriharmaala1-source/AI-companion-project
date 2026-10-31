@@ -15,3 +15,7 @@ gcc "${FLAGS[@]}" -I"$C/lora_detect/include" -I"$HERE" "$HERE/test_lora_detect.c
 "$OUT/elrs"
 "$OUT/keymap"
 "$OUT/lora"
+gcc "${FLAGS[@]}" -I"$C/band_detect/include" -I"$C/lora_detect/include" -I"$HERE" "$HERE/test_band_detect.c" \
+    "$HERE/lora_synth.c" "$C/band_detect/band_watch.c" "$C/band_detect/ofdm_detect.c" \
+    "$C/lora_detect/lora_detect.c" -lm -o "$OUT/band"
+"$OUT/band"
