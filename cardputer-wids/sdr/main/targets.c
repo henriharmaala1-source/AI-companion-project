@@ -50,7 +50,9 @@ static ui_target_t *add(list_t *l, target_kind_t kind, ui_level_t level, float m
     }
     ui_target_t *t = &l->out[l->n++];
     memset(t, 0, sizeof(*t));
+    static const char *const tags[TGT_KINDS] = { "LoRa", "DJI-like", "hopper", "wide", "oven", "Wi-Fi" };
     t->kind = (uint8_t)kind;
+    t->tag = tags[kind];
     t->level = (uint8_t)level;
     t->mhz = mhz;
     return t;

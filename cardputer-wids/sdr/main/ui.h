@@ -23,6 +23,7 @@ typedef struct {
     uint8_t kind;      /* target_kind_t */
     uint8_t level;     /* ui_level_t */
     float   mhz;       /* RF, 0 if unknown */
+    const char *tag;   /* one word for the "also:" line, e.g. "oven" */
     char    text[UI_TARGET_TEXT];
 } ui_target_t;
 

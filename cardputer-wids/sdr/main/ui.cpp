@@ -138,10 +138,16 @@ static void draw_targets(const ui_info_t *info, int y, unsigned rows)
     const unsigned n = info->n_targets;
     for (unsigned i = 0; i < n && i < rows; i++) {
         if (i + 1 == rows && n > rows) {
-            char line[40];
+            /* No room: name what is left, one word each. */
+            char line[UI_TARGET_TEXT];
+            size_t w = (size_t)snprintf(line, sizeof(line), "also:");
+            for (unsigned j = i; j < n && w < sizeof(line); j++) {
+                const int k = snprintf(line + w, sizeof(line) - w, "%s %s", j > i ? "," : "",
+                                       info->targets[j].tag ? info->targets[j].tag : "?");
+                w = k < 0 ? sizeof(line) : w + (size_t)k;
+            }
             display.setTextColor(COL_DIM, COL_BG);
             display.setCursor(10, y);
-            snprintf(line, sizeof(line), "+%u more  [d] for numbers", n - i);
             display.print(line);
             return;
         }
