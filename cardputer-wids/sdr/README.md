@@ -37,6 +37,19 @@ This is a separate ESP-IDF image from the Arduino Wi-Fi monitor in
 The screen says DETECTED if either detector does. The `verdict` log line
 says which one (`grid`, `chirp`, `chirp+grid`).
 
+**Hopping or fixed (raw I/Q only).** ELRS hops over 80 channels, so its chirp
+hits in 5 s land on many of them. The watcher groups the hits by channel
+(whole-MHz buckets, neighbours merged): `hop_clusters` in the `lora` log, and
+`ch<N> hop` on the details line. With **5 or more hits all on one channel**
+the LoRa is real but does not hop (a mesh node, an IoT sensor, maybe ELRS
+binding): the screen says "LoRa on ONE channel (not ELRS)", a `lora_fixed`
+event is logged, and the verdict is not ELRS. With fewer hits nothing
+changes, so range is not affected. Cost: a fixed-channel LoRa device shows
+a false ELRS for about a second at the start (the verdict needs 2 hits, this
+test 5), and at the edge of range, with under 5 hits, it still can.
+In the grid detector's "other hopping" state, the line says **Bluetooth-like**
+when most narrow bursts sit on the whole-MHz grid.
+
 **Signal strength.** For each chirp detection the `lora` log carries three
 numbers:
 

@@ -173,7 +173,7 @@ static double jitter_db(uint32_t salt, uint64_t k) /* +-2 dB of fading */
 static void elrs_packet(render_t *r, const rf_emitter_t *e, const uint8_t *seq, uint64_t k)
 {
     const unsigned hop = (unsigned)((k / e->packets_per_hop) % 240u);
-    const double f = 2400400.0 + 1000.0 * seq[hop];
+    const double f = 2400400.0 + 1000.0 * (e->fixed_chan ? e->fixed_chan - 1u : seq[hop]);
     add_tx(r, f, e->bw_khz, rf_level_at(e, e->on_s * 1e6 + (double)k * e->packet_ms * 1000.0) + jitter_db(e->seed, k));
 }
 

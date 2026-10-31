@@ -128,6 +128,8 @@ static void parse_line(const char *line)
         s_log.beeps_boot += strcmp(val, "boot") == 0;
         s_log.beeps_test += strcmp(val, "test") == 0;
         s_log.beeps_unplayed += field(line, "played", val, sizeof(val)) && strcmp(val, "false") == 0;
+    } else if (strcmp(ev, "lora_fixed") == 0) {
+        s_log.lora_fixed += field(line, "fixed", val, sizeof(val)) && strcmp(val, "true") == 0;
     } else if (strcmp(ev, "sound") == 0) {
         s_log.sound_changes++;
     } else if (strcmp(ev, "boot") == 0) {

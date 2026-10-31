@@ -292,6 +292,7 @@ void app_main(void)
     memset(&st, 0, sizeof(st));
     bool details = false;
     elrs_state_t shown_prev = ELRS_QUIET;
+    bool fixed_prev = false;
     uint64_t last_detected_us = 0;
 
     for (;;) {
@@ -323,7 +324,15 @@ void app_main(void)
         chirp_status_t cs;
         chirp_watch_status((uint64_t)now, &cs);
         elrs_status_t shown = st;
-        if (cs.active) {
+        /* LoRa that does not hop (all hits on one channel) is not an ELRS
+         * link: say so, but do not call it ELRS. */
+        const bool chirp_elrs = cs.active && !cs.fixed_channel;
+        if (cs.active && cs.fixed_channel != fixed_prev) {
+            wids_log_event("lora_fixed", "\"fixed\":%s,\"sf\":%u,\"hop_clusters\":%u,\"hits\":%u,\"band\":\"2.4GHz-only\"",
+                           cs.fixed_channel ? "true" : "false", cs.sf, cs.hop_clusters, cs.hits);
+        }
+        fixed_prev = cs.active && cs.fixed_channel;
+        if (chirp_elrs) {
             shown.state = ELRS_LIKELY;
         }
         if (shown.state != shown_prev) {
@@ -332,8 +341,8 @@ void app_main(void)
                            "\"state\":\"%s\",\"by\":\"%s\",\"chirp_tier\":\"%s\",\"chirp_sf\":%u,"
                            "\"band\":\"2.4GHz-only\"",
                            elrs_state_name(shown.state),
-                           cs.active && by_grid ? "chirp+grid" : cs.active ? "chirp" : by_grid ? "grid" : "none",
-                           !cs.active ? "none" : cs.by_weak ? "weak" : "full", cs.active ? cs.sf : 0u);
+                           chirp_elrs && by_grid ? "chirp+grid" : chirp_elrs ? "chirp" : by_grid ? "grid" : "none",
+                           !chirp_elrs ? "none" : cs.by_weak ? "weak" : "full", chirp_elrs ? cs.sf : 0u);
             if (shown.state == ELRS_LIKELY) {
                 ui_alert();
                 beep_play(BEEP_DETECTED);   /* blocks ~0.3 s: between slices only */
@@ -419,7 +428,8 @@ void app_main(void)
                 .center_mhz = CENTER_MHZ, .span_mhz = a->cfg.usable_khz / 1000u,
                 .threshold_db = a->cfg.threshold_db, .invert = a->cfg.invert, .slice_ms = slice_ms,
                 .drops = drops_total, .crc_bad = a->dec.crc_bad, .uptime_us = (uint64_t)now, .gain = a->gain,
-                .details = details, .chirp_active = cs.active, .chirp_weak = cs.by_weak, .chirp_sf = cs.sf, .chirp_hits = cs.hits,
+                .details = details, .chirp_active = chirp_elrs, .chirp_fixed = cs.active && cs.fixed_channel,
+                .chirp_clusters = cs.hop_clusters, .chirp_weak = cs.by_weak, .chirp_sf = cs.sf, .chirp_hits = cs.hits,
                 .chirp_snaps = cs.snaps, .chirp_last_us = cs.last_hit_us, .last_detected_us = last_detected_us,
                 .chirp_snr_db = cs.snr_smooth_db, .chirp_delta_db = cs.delta_db, .chirp_dbfs = cs.level_dbfs,
                 .chirp_agc = cs.agc,

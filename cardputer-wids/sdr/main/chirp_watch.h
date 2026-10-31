@@ -28,6 +28,8 @@ typedef struct {
     float    delta_db;        /* snr_smooth_db minus the SNR when this detection began:
                                * + = getting closer, - = moving away */
     float    clip_frac;       /* last snapshot: samples at the ADC rail (0..1) */
+    uint8_t  hop_clusters;    /* separate 1 MHz-wide channel groups among this verdict's hits */
+    bool     fixed_channel;   /* enough hits, all on ONE channel: LoRa, but not hopping like ELRS */
 } chirp_status_t;
 
 void chirp_watch_init(unsigned rate_code);

@@ -58,6 +58,9 @@ typedef struct {
     double   release_within_s;   /* after elrs_off_s */
     const char *need_whys[4];
     unsigned need_sound_changes;  /* "sound" events ('m' key) the log must hold */
+    bool     need_lora_fixed;     /* the log must hold a "lora_fixed" event saying fixed:true */
+    double   false_likely_s;      /* > 0: ELRS-LIKELY may show for this long after the first
+                                   * chirp (the verdict needs 2 hits, "fixed" needs 5), never again */
     float    min_delta_db;       /* > 0: the "since first" SNR change must reach this */
 } scenario_t;
 
@@ -214,6 +217,21 @@ static void sc_core1_behind_elrs(scenario_t *s)
     shot(s, 39, "end", SHOT_DETECTED);
 }
 
+/* LoRa that stays on one channel (a mesh node, an IoT sensor): chirps that a
+ * fixed-channel device sends are real, but a verdict of ELRS would be wrong. */
+static void sc_lora_fixed_channel(scenario_t *s)
+{
+    s->what = "LoRa SF6 on ONE channel, strong: never called ELRS (it does not hop)";
+    s->duration_s = 60;
+    home_background(s);
+    rf_emitter_t e = elrs_250(25.0f, 2, 1e9);
+    e.fixed_chan = 40;   /* grid channel 39, inside the visible span */
+    add(s, e);
+    s->need_lora_fixed = true;
+    s->false_likely_s = 3.0;
+    shot(s, 59, "end", SHOT_NOT_DETECTED);
+}
+
 static void sc_elrs_in_crowd(scenario_t *s)
 {
     s->what = "ELRS 250 Hz alongside Bluetooth audio, BLE and busy Wi-Fi";
@@ -358,6 +376,7 @@ static const entry_t k_scenarios[] = {
     { "home_no_elrs", sc_home_no_elrs },
     { "bt_audio_no_afh", sc_bt_audio_no_afh },
     { "soak_crowd", sc_soak_crowd },
+    { "lora_fixed_channel", sc_lora_fixed_channel },
     { "core1_behind_no_elrs", sc_core1_behind_no_elrs },
     { "core1_behind_elrs", sc_core1_behind_elrs },
     { "elrs_500_arrives", sc_elrs_500_arrives },
@@ -497,6 +516,20 @@ static void check_verdicts(const scenario_t *sc, const sim_log_t *log)
 {
     const double first_any = first_likely_s(log, 0.0);
     /* The alert sound follows the verdict: never for a false one. */
+    if (!sc->expect_detect && sc->false_likely_s > 0.0) {
+        double again = -1.0;
+        for (unsigned i = 0; i < log->n_tr; i++) {
+            const double t = log->tr[i].t_us / 1e6;
+            if (log->tr[i].state == ELRS_LIKELY && first_any >= 0 && t > first_any + sc->false_likely_s) {
+                again = t;
+            }
+        }
+        report(sim_state_at(log, first_any + sc->false_likely_s) != ELRS_LIKELY && again < 0,
+               "ELRS verdict cleared within %.0f s of the first chirp and never came back (first %.1f s, again %.1f s)",
+               sc->false_likely_s, first_any, again);
+        report(log->beeps_detected <= 1, "at most one 'detected' beep for it (%u)", log->beeps_detected);
+        return;
+    }
     if (!sc->expect_detect) {
         report(first_any < 0, "never ELRS DETECTED (first at %.1f s)", first_any);
         report(log->beeps_detected == 0, "no 'detected' beep without a detection (%u)", log->beeps_detected);
@@ -594,6 +627,9 @@ static int run_one(const entry_t *en, const char *outdir)
                log->sound_changes, sc.need_sound_changes);
     }
     report(log->beeps_boot >= 1, "boot tick played (%u 'boot' beeps)", log->beeps_boot);
+    if (sc.need_lora_fixed) {
+        report(log->lora_fixed >= 1, "log says the LoRa is on one channel (%u 'lora_fixed' events)", log->lora_fixed);
+    }
     engine_notes(&sc);
     if (g_summary) {
         fclose(g_summary);

@@ -119,12 +119,23 @@ static void draw_reason(const elrs_status_t *st, const ui_info_t *info)
         break;
     case ELRS_HOPPER:
         display.setTextColor(COL_WARN, COL_BG);
-        snprintf(line, sizeof(line), "other hopping signal (not ELRS grid)");
+        /* Bluetooth (and BLE advertising) sit on whole MHz, ELRS on x.4: when
+         * most narrow bursts are on the whole-MHz grid, say Bluetooth-like. */
+        if (st->int_grid_ratio >= 0.6f) {
+            snprintf(line, sizeof(line), "Bluetooth-like hopping (whole-MHz grid)");
+        } else {
+            snprintf(line, sizeof(line), "other hopping signal (not ELRS grid)");
+        }
         break;
     default:
         display.setTextColor(COL_DIM, COL_BG);
         snprintf(line, sizeof(line), "no hopping signal seen on 2.4 GHz");
         break;
+    }
+    if (st->state != ELRS_LIKELY && info->chirp_fixed) {
+        /* LoRa chirps, but not hopping: say what it is and what it is not. */
+        display.setTextColor(COL_WARN, COL_BG);
+        snprintf(line, sizeof(line), "LoRa on ONE channel (not ELRS)");
     }
     centred(line, LINES_Y + 6);
 
@@ -203,8 +214,9 @@ static void draw_details(const elrs_status_t *st, const ui_info_t *info)
              (double)st->wide_per_s, (double)st->dwell_ms);
     display.print(line);
     display.setCursor(2, 74);
-    snprintf(line, sizeof(line), "chirp SF%u %u/%u snaps%s flat %.2f", info->chirp_sf, info->chirp_hits,
-             info->chirp_snaps, info->chirp_weak ? " weak" : "", (double)st->uniformity_cv);
+    snprintf(line, sizeof(line), "chirp SF%u %u/%u snaps%s ch%u %s", info->chirp_sf, info->chirp_hits,
+             info->chirp_snaps, info->chirp_weak ? " weak" : "", info->chirp_clusters,
+             info->chirp_fixed ? "FIXED" : "hop");
     display.print(line);
     display.setTextColor(COL_DIM, COL_BG);
     display.setCursor(2, 86);

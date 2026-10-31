@@ -26,6 +26,12 @@
  * on any of 8 SF/slope pairs, so three that agree within 5 s is rare. */
 #define MIN_WEAK_AGREE  3u
 #define HOLD_US         10000000ull /* verdict held after the last confirming hit */
+/* ELRS hops over 80 channels, so its hits in 5 s land on many of them. Hits
+ * that all sit on one channel mean LoRa that does not hop (a mesh node, an
+ * IoT sensor, maybe ELRS binding): not an ELRS control link. The test only
+ * applies once there are enough hits to expect hopping to show: at the edge
+ * of range, with 2-4 hits, the verdict is left alone (no loss of range). */
+#define FIXED_MIN_HITS  5u
 /* Snapshots are at least one 100 ms slice apart, so 5 s holds at most ~50.
  * If it ever held more, the oldest would drop out of the count: fewer hits
  * counted, never more. */
@@ -40,6 +46,7 @@ typedef struct {
     bool     weak;                  /* passed at least the weak tier */
     uint8_t  sf;                    /* when weak */
     int8_t   slope;
+    int8_t   chan;                  /* when weak: floor(MHz offset from the LO), x.4 and x.6 alike */
 } snap_t;
 
 static struct {
@@ -122,6 +129,44 @@ static void dump(const lora_snapshot_t *snap, float *work, const lora_result_t *
 
 /* Full-pass snapshots in the window; optionally also the snapshots (full
  * or weak) that agree with `sf`/`slope`. */
+/* How many separate channel groups the hits of one SF in the window sit on.
+ * Offsets are floored to whole MHz, so a signal reported at x.4 or x.6 stays
+ * in one bucket; buckets within 1 MHz of each other count as one. The chirp
+ * direction is ignored: it says nothing about the channel, and a stray hit
+ * with the other direction made the fixed-channel verdict flap (simulator). */
+static unsigned window_clusters(uint64_t now_us, uint8_t sf, unsigned *hits)
+{
+    int8_t seen[HISTORY];
+    unsigned n = 0, h = 0;
+    for (unsigned k = 0; k < s.count; k++) {
+        const snap_t *e = &s.hist[(s.head + HISTORY - 1 - k) % HISTORY];
+        if ((uint32_t)(now_us / 1000u) - e->t_ms > WINDOW_US / 1000u) {
+            break;
+        }
+        if (e->weak && e->sf == sf) {
+            seen[n++] = e->chan;
+            h++;
+        }
+    }
+    /* insertion sort, then count the gaps larger than one bucket */
+    for (unsigned i = 1; i < n; i++) {
+        const int8_t v = seen[i];
+        unsigned j = i;
+        for (; j > 0 && seen[j - 1] > v; j--) {
+            seen[j] = seen[j - 1];
+        }
+        seen[j] = v;
+    }
+    unsigned clusters = n ? 1u : 0u;
+    for (unsigned i = 1; i < n; i++) {
+        clusters += seen[i] - seen[i - 1] > 1;
+    }
+    if (hits) {
+        *hits = h;
+    }
+    return clusters;
+}
+
 static unsigned window_hits(uint64_t now_us, unsigned *snaps, uint8_t sf, int8_t slope, unsigned *agree)
 {
     unsigned hits = 0, n = 0, same = 0;
@@ -183,7 +228,8 @@ void chirp_watch_step(uint64_t now_us)
     s.last = res;
     s.snaps_total++;
 
-    s.hist[s.head] = (snap_t){ (uint32_t)(now_us / 1000u), res.detected, res.weak, res.sf, res.slope };
+    s.hist[s.head] = (snap_t){ (uint32_t)(now_us / 1000u), res.detected, res.weak, res.sf, res.slope,
+                               (int8_t)floorf(res.freq_hz / 1e6f) };
     s.head = (s.head + 1) % HISTORY;
     s.count += s.count < HISTORY;
     if (now_us >= s.active_until_us) {
@@ -237,6 +283,10 @@ void chirp_watch_status(uint64_t now_us, chirp_status_t *out)
     out->snr_smooth_db = s.snr_smooth;
     out->delta_db = s.have_ref ? s.snr_smooth - s.snr_ref : 0.0f;
     out->clip_frac = s.last.clip_frac;
+    unsigned lhits = 0;
+    const unsigned clusters = window_clusters(now_us, s.last_hit.sf, &lhits);
+    out->hop_clusters = (uint8_t)(clusters > 255u ? 255u : clusters);
+    out->fixed_channel = out->active && lhits >= FIXED_MIN_HITS && clusters == 1u;
 }
 
 void chirp_watch_log(uint64_t now_us)
@@ -263,7 +313,7 @@ void chirp_watch_log(uint64_t now_us)
                    "\"tier\":\"%s\",\"weak\":%s,\"sf\":%u,\"slope\":%d,"
                    "\"freq_mhz\":%.2f,\"cand_db\":%.1f,\"snr_db\":%.1f,\"dbfs\":%.1f,\"agc\":%u,"
                    "\"snr_smooth\":%.1f,\"delta_db\":%.1f,"
-                   "\"cands\":%u,\"clip_pct\":%.1f,\"work_mod16\":%u,\"sf5_8\":[%s],\"scan_ms\":%.1f,"
+                   "\"hop_clusters\":%u,\"cands\":%u,\"clip_pct\":%.1f,\"work_mod16\":%u,\"sf5_8\":[%s],\"scan_ms\":%.1f,"
                    "\"scan_ms_max\":%.1f,\"step_ms\":%.1f,\"snaps\":%" PRIu32 ",\"hits\":%" PRIu32
                    ",\"weak_only\":%" PRIu32 ",\"cap_err\":%" PRIu32,
                    snaps, hits, agree, now_us < s.active_until_us ? "true" : "false",
@@ -271,7 +321,8 @@ void chirp_watch_log(uint64_t now_us)
                    r->weak && !r->detected ? "true" : "false", r->sf, r->slope,
                    (double)r->freq_hz / 1e6, (double)r->cand_db, (double)r->snr_db, (double)r->level_dbfs,
                    r->agc, (double)s.snr_smooth, (double)(s.have_ref ? s.snr_smooth - s.snr_ref : 0.0f),
-                   r->candidates, (double)(100.0f * s.last.clip_frac), s.work_mod16, sfs,
+                   window_clusters(now_us, s.last_hit.sf, NULL), r->candidates,
+                   (double)(100.0f * s.last.clip_frac), s.work_mod16, sfs,
                    (double)s.scan_us_last / 1000.0, (double)s.scan_us_max / 1000.0,
                    (double)s.step_us_last / 1000.0, s.snaps_total, s.hits_total, s.weak_total, s.cap_errors);
 }

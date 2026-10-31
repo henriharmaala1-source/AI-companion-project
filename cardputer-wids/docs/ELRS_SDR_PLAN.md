@@ -273,12 +273,14 @@ signal levels: M0 still decides whether the idea works at all.
   - Check whether `empty_frames` is above 0 (core 1 behind) and whether the
     grid detector now separates ELRS on from off.
 
-- [ ] **Require hopping for an ELRS verdict.** A chirp verdict also needs hits
-  on at least 3 different grid channels in the evidence window. Fixed-frequency
-  LoRa (mesh, IoT) then never counts. The screen should say "ELRS or similar
-  LoRa RC link": other hopping 2.4 GHz LoRa links with the same settings
-  (TBS Tracer and mLRS are candidates, unverified) would still pass. Add a
-  simulator scenario with a fixed-channel LoRa device that must not trigger.
+- [x] **Fixed-channel LoRa is not ELRS** (partly). Hits in the 5 s window are
+  grouped by channel; 5+ hits on one channel give "LoRa on ONE channel (not
+  ELRS)" and no ELRS verdict, with a simulator scenario for it. Done as a
+  label after 5 hits, not as a requirement of 3 channels before any verdict,
+  because that would cost range. Still open: other hopping 2.4 GHz LoRa links
+  with the same settings (TBS Tracer, mLRS are candidates, unverified) would
+  still pass, so the screen should keep saying "ELRS or similar LoRa RC
+  link"; and the first ~1 s of a fixed-channel device still reads ELRS.
 - [x] **Software range, no hardware needed** (host sweep + simulator):
   candidate gate 3 → 1 dB (~4 dB), weak tier with SF/slope agreement
   (~1.5 dB), snapshot rate set by measured cost instead of every second

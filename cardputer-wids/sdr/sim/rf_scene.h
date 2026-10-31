@@ -43,6 +43,8 @@ typedef struct {
     uint32_t seed;          /* stands in for the binding phrase */
     unsigned sf;            /* LoRa spreading factor, 0 = FLRC (no chirp) */
     bool     invert_iq;     /* ExpressLRS invertIQ = UID[5] & 1 */
+    unsigned fixed_chan;    /* 0 = hops like ELRS; else stays on grid channel fixed_chan - 1
+                             * (stands in for fixed-channel LoRa: mesh, IoT, ELRS binding?) */
     float    ramp_db_per_s; /* level change over time: a transmitter approaching (+) or leaving (-) */
     /* RF_WIFI */
     unsigned wifi_channel;  /* 1..13 */

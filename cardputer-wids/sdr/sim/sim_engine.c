@@ -365,7 +365,8 @@ static void synth_elrs(synth_t *sy, const rf_scene_t *sc, unsigned idx, double t
         if (ps + air <= t0 || ps >= end) {
             continue;
         }
-        const unsigned ch = sc->elrs_seq[idx][((uint64_t)k / e->packets_per_hop) % 240u];
+        const unsigned ch = e->fixed_chan ? e->fixed_chan - 1u
+                                          : sc->elrs_seq[idx][((uint64_t)k / e->packets_per_hop) % 240u];
         const double f = 2400.4e6 + ch * 1e6 - center;
         const float level = rf_level_at(e, ps);
         if (e->sf == 0) {

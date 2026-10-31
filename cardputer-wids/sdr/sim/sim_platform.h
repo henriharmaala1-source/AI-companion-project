@@ -30,6 +30,7 @@ typedef struct {
     unsigned beeps_detected, beeps_lost, beeps_boot, beeps_test;   /* "beep" events by pattern */
     unsigned beeps_unplayed;           /* "beep" events with played:false (sound off) */
     unsigned sound_changes;            /* "sound" events ('m' key) */
+    unsigned lora_fixed;               /* "lora_fixed" events with fixed:true */
     float    lora_delta_db;            /* from the last "lora" line */
     float    lora_snr_db;
 } sim_log_t;
