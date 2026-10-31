@@ -352,6 +352,35 @@ static void test_ofdm_weak(void)
           "...and never called Wi-Fi or 30 kHz");
 }
 
+/* The simulator's false DJI: two wild scans among ordinary ones must not
+ * make a verdict (ofdm_detect.c, k_step_max); a steady high score must. */
+static void test_outliers(void)
+{
+    ofdm_watch_t w;
+    ofdm_watch_init(&w);
+    ofdm_result_t r;
+    memset(&r, 0, sizeof(r));
+    bool on = false;
+    for (unsigned k = 0; k < 20; k++) {
+        for (unsigned f = 0; f < OFDM_KINDS; f++) {
+            r.score[f] = (k == 8 || k == 9) ? 15.0f : 2.3f;
+        }
+        ofdm_watch_update(&w, 4, &r, 1000000ull * (k + 1));
+        on |= ofdm_watch_on(&w, 4, OFDM_LTE30, 1000000ull * (k + 1));
+    }
+    CHECK(!on, "two wild scans (z 15) among ordinary ones: no verdict (mean peaked below threshold)");
+    ofdm_watch_init(&w);
+    unsigned scans = 0;
+    for (on = false; scans < 12 && !on; scans++) {
+        for (unsigned f = 0; f < OFDM_KINDS; f++) {
+            r.score[f] = 9.0f;
+        }
+        ofdm_watch_update(&w, 4, &r, 1000000ull * (scans + 1));
+        on = ofdm_watch_on(&w, 4, OFDM_LTE30, 1000000ull * (scans + 1));
+    }
+    CHECK(on && scans <= 8, "a steady z of 9 is on after %u scans", scans);
+}
+
 static void test_pick(void)
 {
     ofdm_watch_t w;
@@ -382,6 +411,7 @@ int main(void)
     test_ofdm_single();
     test_ofdm_negatives();
     test_ofdm_weak();
+    test_outliers();
     test_pick();
     printf("band_detect: %u passed, %u failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

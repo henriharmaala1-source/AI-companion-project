@@ -13,6 +13,10 @@
 /* "Wide signal" needs steady wide activity and enough scans to have looked. */
 #define WIDE_DUTY_MIN      0.2f
 #define WIDE_MIN_SCANS     6u
+/* Any slot of the run with a mean this high (any kind) explains it too: a
+ * bursty access point's verdict lapses now and then, and the run is then
+ * still Wi-Fi, not an unknown wide signal (simulator). */
+#define WIDE_EXPLAINED_AVG 3.5f
 #define NEAR_MW_MHZ        10.0f
 #define NEAR_LORA_MHZ      3.0f
 #define MAX_RUNS           8u
@@ -188,6 +192,9 @@ static void add_wide(const target_inputs_t *in, list_t *l, const run_t *runs, un
         for (unsigned s = 0; s < OFDM_SLOTS; s++) {
             if (slot_in_run(s, &runs[r])) {
                 explained |= any_on(in, s);
+                for (unsigned k = 0; k < OFDM_KINDS; k++) {
+                    explained |= in->ofdm->slot[s].avg[k] >= WIDE_EXPLAINED_AVG;
+                }
                 looked |= in->ofdm->slot[s].scans >= WIDE_MIN_SCANS;
             }
         }

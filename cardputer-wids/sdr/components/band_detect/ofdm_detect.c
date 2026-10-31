@@ -41,6 +41,16 @@ static const family_t k_family[OFDM_KINDS] = {
  * few such scans lifted a slot's mean from ~2.3 to 5.0. */
 static const float k_on[OFDM_KINDS] = { 4.5f, 5.5f, 5.5f };
 #define AVG_WEIGHT  0.3f
+/* For the LTE-like kinds one scan may pull the mean up by at most
+ * AVG_WEIGHT x k_step_max: a single wild scan (in the simulator, a Wi-Fi
+ * burst plus part of an ELRS chirp scored ~15 and lifted a slot from 2.3 to
+ * 6.1 at once) can no longer make a verdict. A DJI-style downlink is
+ * continuous, keeps scoring high, and still crosses the threshold within
+ * MIN_SCANS. Wi-Fi is bursty (most snapshots catch no packet, the rest score
+ * ~20): capped, its mean settled near 3.3, under its threshold, so Wi-Fi is
+ * not capped. A new slot starts at AVG_START, near the noise mean. */
+static const float k_step_max[OFDM_KINDS] = { 1e9f, 3.0f, 3.0f };
+#define AVG_START    3.0f
 #define MIN_SCANS   6u
 #define HOLD_US     8000000ull     /* a kind stays on this long after its last strong mean */
 #define STALE_US    20000000ull    /* a slot not scanned for this long starts afresh */
@@ -287,7 +297,9 @@ void ofdm_watch_update(ofdm_watch_t *w, unsigned slot, const ofdm_result_t *r, u
         s->scans = 0;
     }
     for (unsigned k = 0; k < OFDM_KINDS; k++) {
-        s->avg[k] = s->scans ? s->avg[k] + AVG_WEIGHT * (r->score[k] - s->avg[k]) : r->score[k];
+        const float base = s->scans ? s->avg[k] : AVG_START;
+        const float x = r->score[k] < base + k_step_max[k] ? r->score[k] : base + k_step_max[k];
+        s->avg[k] = base + AVG_WEIGHT * (x - base);
         if (s->scans + 1u >= MIN_SCANS && s->avg[k] >= k_on[k]) {
             s->on_until_us[k] = now_us + HOLD_US;
         }

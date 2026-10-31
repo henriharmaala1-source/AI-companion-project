@@ -8,7 +8,7 @@ Newest at the top.
 
 ---
 
-## Microwave and DJI-like detectors: six flaws found before hardware
+## Microwave and DJI-like detectors: seven flaws found before hardware
 
 New this round: `band_watch` (microwave ovens, wide occupancy, from the
 spectrum frames) and `ofdm_detect` (Wi-Fi vs LTE-like "DJI-like" OFDM by
@@ -59,6 +59,14 @@ first:
    the LTE-like bar to a mean ≥ 5.5 over ≥ 6 scans, and ≥ 7 for a slot with
    no spectral activity. **Cost:** DJI-like detection now needs ~0 dB in the
    slot instead of ~−3 dB.
+   The next full run still found one: a single scan scoring ~15 (a Wi-Fi
+   burst plus part of a chirp) lifted a Wi-Fi slot's LTE-like mean from 2.3
+   to 6.1 at once. **Fix:** for the LTE-like kinds, one scan may pull the mean
+   up by at most 0.9 (0.3 × 3). A DJI-style downlink is continuous and still
+   gets there within the 6 scans. The same cap broke Wi-Fi: bursty, mostly
+   ordinary scores with occasional ~20s, it settled at 3.3 under its 4.5
+   threshold and showed as "wide signal". So Wi-Fi is not capped, and a run
+   with any slot mean ≥ 3.5 is never called an unknown wide signal.
 
 **Lesson.** A detector that is very sensitive in one dimension (here: any
 repetition at a given delay) needs a second, independent dimension to stay

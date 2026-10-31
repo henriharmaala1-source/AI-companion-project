@@ -266,7 +266,7 @@ signal levels: M0 still decides whether the idea works at all.
 ## To do
 
 - [ ] **Microwave and DJI-like detectors on real air** (written, host- and
-  simulator-tested only; BUGLOG "six flaws found before hardware"):
+  simulator-tested only; BUGLOG "seven flaws found before hardware"):
   - Run a kitchen microwave 2–5 m away. Expect the `microwave` target and,
     in the `band` log, `r` ≥ 0.45, `duty` 0.2–0.8, `cover` ~1. An inverter
     oven may not show: note the model.
